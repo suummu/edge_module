@@ -1,0 +1,11 @@
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# 실행 결과물 (코드 재실행으로 재생성 가능하므로 커밋하지 않음)
+outputs/
+
+# OS
+.DS_Store
