@@ -64,6 +64,40 @@ def frequency_band_energy(freqs, magnitudes, center_hz, band_width_hz=5.0):
     return float(np.sum(magnitudes[idx]))
 
 
+def estimate_rotation_hz(freqs, magnitudes, previous_estimate=None,
+                          search_range_hz=(30.0, 70.0), max_jump_hz=5.0):
+    """
+    FFT 결과에서 실제 회전 주파수를 추정한다 - harmonic1/2/3_energy가
+    어디를 볼지 정하는 기준축(reference axis) 역할.
+
+    peak_freq와 다른 점: peak_freq는 판별용 특징(feature)으로 썼다가 분산이
+    거의 없어 폐기됐다(변별력 없음). 이 함수는 판별용이 아니라 "지금 회전수가
+    몇 Hz인가"를 추정하는 것이 목적이라 역할이 다르므로 별개 함수로 둔다.
+
+    search_range_hz: 정격 RPM(nameplate rated RPM) 기준 탐색 범위. FFT 전체에서
+        최대 피크를 찾지 않고 이 범위 안에서만 찾아, 배음이나 노이즈 피크에
+        낚이지 않게 한다.
+    max_jump_hz: previous_estimate 대비 이보다 크게 튀면 노이즈로 간주하고
+        이전 값을 유지한다 - 순간값이 아니라 완만하게 갱신되는 rolling estimate.
+
+    한계(A-series): 정격 RPM을 preset 탐색범위로 쓰지만, PLC 연동이 없어
+    실시간 부하 변동(운전점 자체의 이동)은 반영하지 못한다.
+    """
+    idx = (freqs >= search_range_hz[0]) & (freqs <= search_range_hz[1])
+    if not np.any(idx):
+        return previous_estimate
+
+    band_freqs = freqs[idx]
+    band_mags = magnitudes[idx]
+    candidate = float(band_freqs[np.argmax(band_mags)])
+
+    if previous_estimate is None:
+        return candidate
+    if abs(candidate - previous_estimate) > max_jump_hz:
+        return previous_estimate
+    return candidate
+
+
 def extract_features(signal, sample_rate=SAMPLE_RATE, rotation_hz_estimate=None):
     """
     하나의 신호 구간(윈도우)에서 핵심 특징값을 뽑아낸다.
@@ -73,17 +107,26 @@ def extract_features(signal, sample_rate=SAMPLE_RATE, rotation_hz_estimate=None)
         FFT 해상도 한계 때문에 이 값의 변동성이 거의 0으로 나와 판별에 기여를
         못했다. 대신 2차/3차 배음 "대역 에너지"를 특징으로 추가해서, 고장 시
         3차 배음이 커지는 패턴을 더 안정적으로 잡아낸다.
-      - rotation_hz_estimate: 현재 추정 회전 주파수. None이면 기본 FAN_ROTATION_HZ 사용.
-        (실제 배포 시에는 회전계 센서나 1차 피크로 실시간 추정해서 넣어야 함 -> TODO)
+      - rotation_hz_estimate: 이전 윈도우에서 추정된 회전 주파수 (체이닝용 시드).
+        None이면 estimate_rotation_hz()가 탐색범위 내 피크를 그대로 채택한다.
+        연속된 스트림(같은 설비를 실시간으로 관측하는 흐름)에서는 호출자가
+        이번 호출의 반환값 중 "rotation_hz_estimate"를 다음 호출의 인자로
+        넘겨서 스무딩 체인을 이어가야 한다. 서로 무관한 독립 샘플(예: baseline
+        학습용 60개 윈도우)에는 매번 None을 넘겨 독립적으로 추정한다.
 
     반환하는 특징:
         rms: 신호 유효값 (에너지 크기, 고장 시 대체로 증가)
         kurtosis_val: 첨도 (신호가 얼마나 뾰족한지, 베어링 결함 시 증가하는 경향)
         peak_freq: FFT에서 가장 큰 피크가 나타난 주파수 (참고용, 단독 판별엔 부적합)
         peak_magnitude: 그 피크의 크기
-        harmonic2_energy: 2차 배음(회전주파수 x2) 대역 에너지
-        harmonic3_energy: 3차 배음(회전주파수 x3) 대역 에너지 - 불균형 고장의 주 지표
-        high_freq_energy: 250~400Hz 고주파 대역 에너지 - 베어링 결함류 지표
+        rotation_hz_estimate: 이번 윈도우에서 추정/갱신된 회전 주파수 (다음 호출에 체이닝)
+        harmonic1_energy: rotation_hz_estimate x1 대역 에너지 - 불평형 고장의 직접 지표
+        harmonic2_energy: rotation_hz_estimate x2 대역 에너지 - 정렬 불량의 직접 지표
+        harmonic3_energy: rotation_hz_estimate x3 대역 에너지 - 이완 고장의 지표
+        high_freq_energy: 250~400Hz 대역 에너지 - 시뮬레이션에서 저주파 고장에
+            동반되는 고주파 부가 성분을 잡기 위한 보조 지표. 실제 베어링 결함
+            진단(1~20kHz + 포락선 분석)과는 다른 개념이며, 본 프로젝트는
+            베어링 정밀진단을 범위 밖으로 명시적으로 제외함.
     """
     rms = float(np.sqrt(np.mean(signal ** 2)))
     kurtosis_val = float(kurtosis(signal))  # 정규분포 기준 0 (scipy는 excess kurtosis 반환)
@@ -96,7 +139,10 @@ def extract_features(signal, sample_rate=SAMPLE_RATE, rotation_hz_estimate=None)
     peak_freq = float(freqs[valid_idx][peak_idx])
     peak_magnitude = float(magnitudes[valid_idx][peak_idx])
 
-    base_hz = rotation_hz_estimate if rotation_hz_estimate is not None else gen.FAN_ROTATION_HZ
+    rotation_hz_estimate = estimate_rotation_hz(freqs, magnitudes,
+                                                 previous_estimate=rotation_hz_estimate)
+    base_hz = rotation_hz_estimate
+    harmonic1_energy = frequency_band_energy(freqs, magnitudes, base_hz * 1)
     harmonic2_energy = frequency_band_energy(freqs, magnitudes, base_hz * 2)
     harmonic3_energy = frequency_band_energy(freqs, magnitudes, base_hz * 3)
     high_freq_energy = float(np.sum(magnitudes[(freqs >= 250) & (freqs <= 400)]))
@@ -106,6 +152,8 @@ def extract_features(signal, sample_rate=SAMPLE_RATE, rotation_hz_estimate=None)
         "kurtosis": kurtosis_val,
         "peak_freq": peak_freq,
         "peak_magnitude": peak_magnitude,
+        "rotation_hz_estimate": base_hz,
+        "harmonic1_energy": harmonic1_energy,
         "harmonic2_energy": harmonic2_energy,
         "harmonic3_energy": harmonic3_energy,
         "high_freq_energy": high_freq_energy,

@@ -39,7 +39,7 @@ python -m src.visualize             # 5. 그래프 4장 생성 (outputs/ 폴더�
 ```
 signal_generator.py      정상/고장 진동 신호 생성 (시뮬레이션)
         ↓
-feature_extraction.py    FFT + 특징추출 (RMS, 첨도, 배음 에너지, 고주파 에너지)
+feature_extraction.py    FFT + 특징추출 (RMS, 첨도, 1~3차 배음 에너지, 고주파 에너지)
         ↓
 baseline_detector.py     통계 baseline 판별 + 연속성 필터 + 위험정상화 방지  ★핵심
         ↓
@@ -58,15 +58,32 @@ visualize.py              위 결과를 그래프로 시각화
 반드시 재검증이 필요합니다.
 
 ### `src/feature_extraction.py`
-RMS, 첨도, 2차/3차 배음 대역 에너지, 고주파(250~400Hz) 대역 에너지를 계산합니다.
+RMS, 첨도, 1차/2차/3차 배음 대역 에너지, 고주파(250~400Hz) 대역 에너지를 계산합니다.
 `peak_freq`/`peak_magnitude`는 FFT 해상도 한계로 변별력이 낮아 참고용으로만
-남겨뒀습니다.
+남겨뒀습니다. 1차/2차/3차 배음은 각각 불평형(1x)/정렬 불량(2x)/이완(2x,3x,4x 일부)
+고장에 직접 대응하는 지표입니다. 고주파(250~400Hz) 대역은 실제 베어링 결함
+진단(1~20kHz + 포락선 분석)과는 다른 개념의 보조 지표이며, 본 프로젝트는
+베어링 정밀진단을 범위 밖으로 명시적으로 제외합니다.
+
+배음 대역의 중심 주파수는 고정값(`FAN_ROTATION_HZ=50`)이 아니라
+`estimate_rotation_hz()`가 매 윈도우 추정하는 실제 회전 주파수 기준으로 정해집니다.
+정격 RPM(nameplate) 근방의 탐색범위(기본 30~70Hz) 안에서 최대 피크를 찾고,
+직전 추정치 대비 급격히 튀는 값(기본 5Hz 초과)은 노이즈로 간주해 무시하는
+rolling estimate입니다. `peak_freq`와 달리 이건 판별용 특징이 아니라 하모닉 밴드를
+어디에 놓을지 정하는 기준축(reference axis)입니다.
+
+**한계**: 정격 RPM을 preset 탐색범위로 사용하지만, PLC 연동이 없어 실시간 부하
+변동(운전점 자체의 이동)은 반영하지 못합니다.
 
 **주의**: ESP32에는 scipy가 없으므로 이 계산식들은 C로 재구현해야 합니다.
 
 ### `src/baseline_detector.py` (핵심 로직)
 정상 데이터의 평균/표준편차로 baseline을 잡고 3-sigma 이탈 시 1차 의심 판정을
-내립니다. 다음 두 가지 안전장치가 추가되어 있습니다.
+내립니다. 판별에 실제 사용하는 특징(`ACTIVE_FEATURES`)은
+`rms, harmonic1_energy, harmonic2_energy, harmonic3_energy, high_freq_energy`이며,
+`kurtosis`는 베어링 결함류 지표라 범위 밖(베어링 정밀진단 제외)이라는 이유로,
+`peak_freq`/`peak_magnitude`는 변별력 부족으로 제외했습니다. 다음 두 가지
+안전장치가 추가되어 있습니다.
 
 - **연속성 필터링**: 연속 5개 윈도우 중 60% 이상이 의심 판정이어야 "확정 이상"으로
   격상합니다 (단발 노이즈로 인한 오탐 방지).
@@ -77,7 +94,21 @@ RMS, 첨도, 2차/3차 배음 대역 에너지, 고주파(250~400Hz) 대역 에�
 `ABSOLUTE_RMS_LIMIT = None`으로 절대 임계값 자리는 마련해뒀으나, 실제 데이터시트
 확보 전까지는 비활성 상태입니다.
 
-시뮬레이션 신호 기준 측정 결과: 오탐율 6%, 미탐율 0% (`fault_strength=0.5` 기준).
+시뮬레이션 신호 기준 측정 결과 (`fault_strength=0.5` 기준, `evaluate_detection_rate`):
+오탐율 4%, 미탐율 0%. 단, 이 수치는 `is_suspect`(연속성 필터 통과 전 1차 판정)
+기준이라 실제 경보 기준과 다릅니다. `is_anomaly`(확정 이상) 기준으로 다시 잰
+정직한 수치는 다음 두 가지입니다.
+
+- **Scenario A (확정 오탐율)**: 정상 신호만 리셋 없이 200윈도우 연속으로 흘렸을 때
+  `is_anomaly` 확정 오탐율 0% (`evaluate_confirmed_false_positive_rate`). 연속성
+  필터가 단발 오탐을 대부분 걸러낸다는 뜻입니다.
+- **Scenario B (탐지 지연)**: 그 대가로 고장 발생 후 확정 판정까지 평균 3.0윈도우
+  지연됩니다 (`measure_detection_latency`, 20회 시행 전부 탐지 성공, 미탐지 0회).
+  `confirm_window=5, confirm_ratio=0.6` 기준 이론적 최소 지연이 3윈도우이므로
+  거의 그 하한에 붙어 있습니다.
+
+즉 Scenario A의 낮아진 오탐율만 내세우면 안 되고, Scenario B의 지연을 같이
+봐야 정직한 그림입니다 — 오탐을 줄인 만큼 탐지가 그만큼 늦어집니다.
 이 로직이 최종적으로 ESP32 C/C++ 코드로 이식될 대상입니다.
 
 ### `src/reference_comparison.py` (참고용, ESP32 미이식)

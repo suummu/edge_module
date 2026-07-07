@@ -41,6 +41,17 @@ ABSOLUTE_RMS_LIMIT = None  # 나중에 데이터시트 기반 값으로 채울 �
 # "서서히 나빠지고 있다"는 경고를 별도로 띄운다 (재보정과 무관하게 항상 확인).
 DRIFT_WARNING_RATIO = 1.5
 
+# ---- 판별에 실제 사용할 특징 ----
+# peak_freq는 feature_extraction.py에서 확인했듯 표준편차가 0에 가까워 판별력이 없으므로 제외.
+# peak_magnitude도 정상/고장 차이가 거의 없어 제외. rotation_hz_estimate는 하모닉 밴드
+# 위치를 정하는 기준축일 뿐 판별용 특징이 아니므로 제외.
+# kurtosis는 제외: 베어링 결함류 지표인데 본 프로젝트는 베어링 정밀진단을 범위 밖으로
+# 뒀고, 시뮬레이션 신호(사인파 합성)가 애초에 임펄스성이 아니라 판별력을 기대하기 어려움.
+# 실측 데이터로 판별력이 확인되면 재검토 대상.
+# harmonic1/2/3_energy는 각각 불평형(1x)/정렬불량(2x)/이완(2x,3x,4x 일부) 고장에
+# 직접 대응하는 지표로 구성.
+ACTIVE_FEATURES = ["rms", "harmonic1_energy", "harmonic2_energy", "harmonic3_energy", "high_freq_energy"]
+
 
 class BaselineDetector:
     """
@@ -236,11 +247,96 @@ def evaluate_detection_rate(detector, n_trials=100, fault_strength=0.5):
     }
 
 
-if __name__ == "__main__":
-    # peak_freq는 feature_extraction.py에서 확인했듯 표준편차가 0에 가까워 판별력이 없으므로 제외.
-    # peak_magnitude도 정상/고장 차이가 거의 없어 제외. 실제 변별력 있는 특징만 사용.
-    ACTIVE_FEATURES = ["rms", "kurtosis", "harmonic2_energy", "harmonic3_energy", "high_freq_energy"]
+def evaluate_confirmed_false_positive_rate(n_windows=200, seed=42):
+    """
+    Scenario A: continuity filter를 통과한 뒤의 "진짜" 오탐율.
 
+    evaluate_detection_rate()가 재는 오탐율은 is_suspect(연속성 필터 통과 전
+    1차 판정) 기준이고, 매 시행마다 reset_confirmation_state()를 호출해서
+    confirm_window가 애초에 쌓일 기회가 없다. 실제 경보는 is_anomaly(확정
+    이상)로 울리므로, 이 함수는 정상 신호만 연속으로(세션 시작 시 딱 한 번만
+    리셋한 채) 흘려보내 is_anomaly가 실제로 몇 번 뜨는지를 잰다.
+    """
+    normal_features = build_normal_baseline(n_windows=60)
+    detector = BaselineDetector(n_sigma=3.0, confirm_window=5, confirm_ratio=0.6,
+                                 features_to_check=ACTIVE_FEATURES)
+    detector.fit(normal_features)
+    detector.reset_confirmation_state()
+
+    rng = np.random.default_rng(seed)
+    rotation_estimate = None
+    confirmed_count = 0
+    for _ in range(n_windows):
+        window_seed = int(rng.integers(0, 1_000_000))
+        _, sig = gen.generate_normal_signal(seed=window_seed)
+        features = feat.extract_features(sig[:WINDOW_SIZE], rotation_hz_estimate=rotation_estimate)
+        rotation_estimate = features["rotation_hz_estimate"]
+        result = detector.judge(features)
+        if result["is_anomaly"]:
+            confirmed_count += 1
+
+    return {
+        "confirmed_false_positive_rate": confirmed_count / n_windows,
+        "n_windows": n_windows,
+    }
+
+
+def measure_detection_latency(n_trials=20, fault_strength=0.5, normal_windows_before=10,
+                               max_windows_after_fault=30, seed=100):
+    """
+    Scenario B: 오탐 억제(continuity filter)의 대가로 탐지가 얼마나 늦어지는지 측정.
+
+    정상 -> 고장으로 전환되는 연속 시퀀스(트라이얼 내부는 리셋 없는 하나의 스트림)를
+    만들어, 고장이 시작된 시점부터 is_anomaly가 처음 뜨는 시점까지 몇 윈도우가
+    걸리는지 잰다. confirm_window=5, confirm_ratio=0.6이므로 이론적 최소 지연은
+    3윈도우(5개 중 3개 의심)다. max_windows_after_fault까지 안 뜨면 미탐지로 기록.
+    """
+    normal_features = build_normal_baseline(n_windows=60)
+    rng = np.random.default_rng(seed)
+
+    latencies = []
+    missed_trials = 0
+    for _ in range(n_trials):
+        detector = BaselineDetector(n_sigma=3.0, confirm_window=5, confirm_ratio=0.6,
+                                     features_to_check=ACTIVE_FEATURES)
+        detector.fit(normal_features)
+        detector.reset_confirmation_state()
+        rotation_estimate = None
+
+        for _ in range(normal_windows_before):
+            window_seed = int(rng.integers(0, 1_000_000))
+            _, sig = gen.generate_normal_signal(seed=window_seed)
+            features = feat.extract_features(sig[:WINDOW_SIZE], rotation_hz_estimate=rotation_estimate)
+            rotation_estimate = features["rotation_hz_estimate"]
+            detector.judge(features)
+
+        detected_at = None
+        for i in range(max_windows_after_fault):
+            window_seed = int(rng.integers(0, 1_000_000))
+            _, sig = gen.generate_faulty_signal(seed=window_seed, fault_strength=fault_strength)
+            features = feat.extract_features(sig[:WINDOW_SIZE], rotation_hz_estimate=rotation_estimate)
+            rotation_estimate = features["rotation_hz_estimate"]
+            result = detector.judge(features)
+            if result["is_anomaly"]:
+                detected_at = i + 1  # 고장 시작 후 몇 번째 윈도우에서 확정됐는지 (1-based)
+                break
+
+        if detected_at is None:
+            missed_trials += 1
+        else:
+            latencies.append(detected_at)
+
+    return {
+        "n_trials": n_trials,
+        "fault_strength_tested": fault_strength,
+        "detected_trials": len(latencies),
+        "missed_trials": missed_trials,
+        "latencies_windows": latencies,
+        "mean_latency_windows": float(np.mean(latencies)) if latencies else None,
+    }
+
+
+if __name__ == "__main__":
     print("=== Baseline 학습 (정상 신호 60개 윈도우 사용) ===")
     normal_features = build_normal_baseline(n_windows=60)
     detector = BaselineDetector(n_sigma=3.0, confirm_window=5, confirm_ratio=0.6,
@@ -270,20 +366,26 @@ if __name__ == "__main__":
 
     print("\n=== 연속성 필터링 테스트 (확정 이상으로 격상되는 과정) ===")
     detector.reset_confirmation_state()
+    rotation_estimate = None  # 연속 스트림이므로 윈도우 간 회전수 추정을 체이닝
     print("동일한 심각한 고장 신호를 연속 5개 윈도우에 걸쳐 넣어봄:")
     for i in range(5):
         _, sig = gen.generate_faulty_signal(seed=500 + i, fault_strength=0.9)
-        result = detector.judge(feat.extract_features(sig[:WINDOW_SIZE]))
+        features = feat.extract_features(sig[:WINDOW_SIZE], rotation_hz_estimate=rotation_estimate)
+        rotation_estimate = features["rotation_hz_estimate"]
+        result = detector.judge(features)
         print(f"  윈도우 {i+1}: 1차의심={result['is_suspect']}  "
               f"확정이상={result['is_anomaly']}  "
               f"(최근{detector.confirm_window}개 중 의심비율={result['suspicion_rate_in_window']})")
 
     print("\n=== 위험 정상화(서서히 나빠짐) 시나리오 테스트 ===")
     detector.reset_confirmation_state()
+    rotation_estimate = None  # 연속 스트림이므로 윈도우 간 회전수 추정을 체이닝
     signals, strengths = gen.generate_progressive_wear_sequence(n_windows=10, final_fault_strength=0.9, seed=7)
     print("50 윈도우 전체 대신, 대표로 10단계만 보여줌 (fault_strength 0 -> 0.9로 서서히 증가):")
     for i, (sig, strength) in enumerate(zip(signals, strengths)):
-        result = detector.judge(feat.extract_features(sig[:WINDOW_SIZE]))
+        features = feat.extract_features(sig[:WINDOW_SIZE], rotation_hz_estimate=rotation_estimate)
+        rotation_estimate = features["rotation_hz_estimate"]
+        result = detector.judge(features)
         drift_flag = " <- 위험 정상화 경고!" if result["drift_warnings"] else ""
         print(f"  단계{i+1:2d} (진행도={strength:.2f}): 1차의심={result['is_suspect']}{drift_flag}")
 
@@ -300,6 +402,26 @@ if __name__ == "__main__":
     print("실제 배포 시 오탐율을 낮추려면: (a) baseline 학습 샘플을 늘리거나,")
     print("(b) n_sigma를 3.5~4로 높이거나, (c) 연속성 필터(confirm_window)로 단발 오탐을 거르면 된다.")
     print("지금 confirm_window=5, confirm_ratio=0.6이 바로 이 (c) 역할을 하고 있음.")
+
+    print("\n=== Scenario A: 확정(is_anomaly) 기준 진짜 오탐율 ===")
+    print("(위 오탐율은 is_suspect 기준 - continuity filter 통과 전 1차 판정이다.")
+    print(" 실제 경보는 is_anomaly로 울리므로, 정상 신호를 리셋 없이 연속으로 흘려서 다시 잰다.)")
+    scenario_a = evaluate_confirmed_false_positive_rate(n_windows=200)
+    print(f"윈도우 수: {scenario_a['n_windows']}개 (연속 스트림, 세션당 1회만 리셋)")
+    print(f"확정 오탐율 (is_anomaly 기준): {scenario_a['confirmed_false_positive_rate']*100:.1f}%")
+
+    print("\n=== Scenario B: 탐지 지연(latency) - Scenario A의 대가 ===")
+    scenario_b = measure_detection_latency(n_trials=20, fault_strength=0.5)
+    print(f"시행 횟수: {scenario_b['n_trials']}회, 테스트한 고장 강도: {scenario_b['fault_strength_tested']}")
+    print(f"탐지 성공: {scenario_b['detected_trials']}회, 미탐지: {scenario_b['missed_trials']}회")
+    if scenario_b["mean_latency_windows"] is not None:
+        print(f"평균 탐지 지연: 고장 시작 후 {scenario_b['mean_latency_windows']:.1f}윈도우 "
+              f"(개별: {scenario_b['latencies_windows']})")
+    else:
+        print("탐지 지연: 측정된 성공 사례 없음 (전부 미탐지)")
+    print("\n[정직한 트레이드오프] Scenario A의 낮아진 오탐율만 내세우면 안 된다 -")
+    print("continuity filter가 단발 오탐을 걸러주는 대신, 그만큼 확정 판정이 늦게 뜬다.")
+    print("confirm_window=5, confirm_ratio=0.6 기준 이론적 최소 지연은 3윈도우다.")
 
     print("\n다음 단계: reference_comparison.py 에서 scikit-learn 방식과 비교 참고")
     print("이후 실제 하드웨어 데이터 확보되면 signal_generator.py만 실제 데이터 리더로 교체")
