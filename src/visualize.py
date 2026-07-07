@@ -162,10 +162,11 @@ def fig3_progressive_wear():
 
 
 def fig4_detection_confusion():
-    ACTIVE_FEATURES = ["rms", "kurtosis", "harmonic2_energy", "harmonic3_energy", "high_freq_energy"]
+    # 배포 로직(baseline_detector.py)과 동일한 특징 세트로 민감도를 측정해야
+    # 이 그래프가 실제 코드 동작을 대변한다. 자체 리스트를 재정의하지 않고 재사용.
     normal_features = det.build_normal_baseline(n_windows=60)
     detector = det.BaselineDetector(n_sigma=3.0, confirm_window=5, confirm_ratio=0.6,
-                                     features_to_check=ACTIVE_FEATURES)
+                                     features_to_check=det.ACTIVE_FEATURES)
     detector.fit(normal_features)
 
     # 0.1부터 이미 100%로 나오면 판별 로직의 실제 민감도 한계가 안 보이므로,

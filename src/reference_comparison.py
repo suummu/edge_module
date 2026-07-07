@@ -26,9 +26,12 @@ from sklearn.preprocessing import StandardScaler
 
 from . import signal_generator as gen
 from . import feature_extraction as feat
+from . import baseline_detector as det
 
 WINDOW_SIZE = gen.WINDOW_SIZE
-FEATURE_KEYS = ["rms", "kurtosis", "harmonic2_energy", "harmonic3_energy", "high_freq_energy"]
+# baseline_detector.py의 배포 로직과 "동일한 특징 세트"로 비교해야 이 대조가 의미가 있다.
+# 따라서 자체 리스트를 새로 정의하지 않고 ACTIVE_FEATURES를 단일 출처로 재사용한다.
+FEATURE_KEYS = det.ACTIVE_FEATURES
 
 
 def features_to_vector(feature_dict):

@@ -141,6 +141,11 @@ def extract_features(signal, sample_rate=SAMPLE_RATE, rotation_hz_estimate=None)
 
     rotation_hz_estimate = estimate_rotation_hz(freqs, magnitudes,
                                                  previous_estimate=rotation_hz_estimate)
+    # estimate_rotation_hz는 탐색범위 내 피크가 없고 previous_estimate도 None이면
+    # None을 반환할 수 있다(현재 윈도우/샘플레이트에선 발생 안 하지만 방어적으로 처리).
+    # 이 경우 정격 회전주파수(FAN_ROTATION_HZ)로 폴백해 하모닉 밴드 계산이 깨지지 않게 한다.
+    if rotation_hz_estimate is None:
+        rotation_hz_estimate = gen.FAN_ROTATION_HZ
     base_hz = rotation_hz_estimate
     harmonic1_energy = frequency_band_energy(freqs, magnitudes, base_hz * 1)
     harmonic2_energy = frequency_band_energy(freqs, magnitudes, base_hz * 2)
