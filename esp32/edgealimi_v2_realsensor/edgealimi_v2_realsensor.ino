@@ -45,6 +45,20 @@
 #include <arduinoFFT.h>
 #include <Preferences.h>
 
+// ==================== 파이썬 대조 검증 모드 ====================
+// C/C++에는 numpy/scipy 같은 내장 모듈이 없어 FFT·통계를 전부 직접 구현했고,
+// 파이썬은 float64 / ESP32는 float32 연산이라 값이 미세하게 달라질 수 있다.
+// 1로 바꾸면: 센서 대신 파이썬이 내보낸 테스트 신호(test_vectors.h)를 입력으로
+// 특징 추출·통계·판별을 돌리고, 파이썬 정답값과 허용 오차 내 일치하는지
+// PASS/FAIL을 출력한다 (중간계획서 Ⅳ-6 "같은 입력에 같은 출력" 대조 검증).
+// 정답 파일 갱신: repo 루트에서 `python -m tools.export_test_vectors`
+// 검증 통과 후 0으로 되돌려 실센서 모드로 사용.
+#define VALIDATION_MODE 1
+
+#if VALIDATION_MODE
+#include "test_vectors.h"
+#endif
+
 // ==================== 보조 채널 컴파일 스위치 (부품 배선 전이면 0으로) ====================
 #define ENABLE_DS18B20  0   // 온도 (1-Wire, OneWire + DallasTemperature 라이브러리 필요)
 #define ENABLE_SCT013   0   // 전류 (ADC, 버든저항 + 바이어스 회로 필요)
@@ -142,6 +156,17 @@ struct JudgeResult {
   bool  driftWarn[N_FEATURES];        // 원본 baseline 대비 드리프트 경고
   float suspicionRate;
 };
+
+// ==================== 함수 프로토타입 ====================
+// Arduino IDE의 자동 프로토타입 생성은 구조체를 반환하는 함수에서 실패하는 경우가
+// 있어 명시적으로 선언한다 (v1과 동일한 관례). 정의 순서와 무관하게 호출 가능해짐.
+JudgeResult judge(const float *features);
+void resetConfirmationState();
+void updateConfirmation(bool isSuspect, bool *outIsAnomaly, float *outRate);
+void saveBaselineToNVS();
+void computeFFT(const float *inputSignal);
+float estimateRotationHz(float previousEstimate);
+void extractFeatures(const float *signal, float *outFeatures, bool independentEstimate);
 
 // ==================== MPU-6050 로우레벨 ====================
 void mpuWriteReg(uint8_t reg, uint8_t val) {
@@ -554,6 +579,125 @@ void handleSerialCommand() {
   }
 }
 
+// ==================== 파이썬 대조 검증 (VALIDATION_MODE=1일 때만 컴파일) ====================
+#if VALIDATION_MODE
+
+// 상대 오차 비교. float32 vs float64 정밀도 차이 + arduinoFFT vs scipy 구현 차이를
+// 감안한 허용 오차. 이보다 크게 벌어지면 이식 버그로 봐야 한다.
+const float REL_TOLERANCE = 0.02f;   // 2%
+const float ABS_FLOOR     = 1e-4f;   // 0 근처 값의 상대오차 폭발 방지
+
+bool nearlyEqual(float cVal, float pyVal) {
+  float diff = fabsf(cVal - pyVal);
+  float scale = fabsf(pyVal);
+  if (scale < ABS_FLOOR) return diff < ABS_FLOOR;
+  return (diff / scale) < REL_TOLERANCE;
+}
+
+void runValidation() {
+  uint16_t passCount = 0, failCount = 0;
+  float features[N_FEATURES];
+
+  Serial.println(F("\n===== 파이썬 대조 검증 시작 ====="));
+  Serial.println(F("(입력: 파이썬이 내보낸 신호 / 정답: 파이썬 float64 계산값 / 허용 상대오차 2%)"));
+
+  // --- 검증 1: 특징 추출 (FFT + 대역 에너지 + RMS + 회전 추정) ---
+  Serial.println(F("\n[검증 1] 특징 추출 — numpy/scipy 없이 직접 구현한 부분"));
+  for (uint16_t w = 0; w < TV_N_WINDOWS; w++) {
+    // 파이썬과 동일하게 독립 추정 (rotation_hz_estimate=None 호출에 대응)
+    extractFeatures(TV_SIGNALS[w], features, true);
+
+    Serial.print(F("  ["));
+    Serial.print(TV_LABELS[w]);
+    Serial.println(F("]"));
+    for (uint8_t k = 0; k < N_FEATURES; k++) {
+      bool ok = nearlyEqual(features[k], TV_EXPECTED_FEATURES[w][k]);
+      ok ? passCount++ : failCount++;
+      Serial.print(ok ? F("    PASS ") : F("    FAIL "));
+      Serial.print(FEATURE_NAMES[k]);
+      Serial.print(F(": C="));
+      Serial.print(features[k], 6);
+      Serial.print(F(" / Python="));
+      Serial.println(TV_EXPECTED_FEATURES[w][k], 6);
+    }
+    // 회전 추정은 같은 bin에 떨어져야 하므로 사실상 정확히 일치해야 함
+    computeFFT(TV_SIGNALS[w]);
+    float rotEst = estimateRotationHz(NAN);
+    if (isnan(rotEst)) rotEst = FAN_ROTATION_HZ;
+    bool rotOk = fabsf(rotEst - TV_EXPECTED_ROTATION_HZ[w]) < 0.01f;
+    rotOk ? passCount++ : failCount++;
+    Serial.print(rotOk ? F("    PASS ") : F("    FAIL "));
+    Serial.print(F("rotation_hz: C="));
+    Serial.print(rotEst, 4);
+    Serial.print(F(" / Python="));
+    Serial.println(TV_EXPECTED_ROTATION_HZ[w], 4);
+  }
+
+  // --- 검증 2: baseline 통계 (평균/표준편차 — np.mean/np.std 직접 구현 부분) ---
+  Serial.println(F("\n[검증 2] baseline 평균/표준편차 계산"));
+  for (uint8_t k = 0; k < N_FEATURES; k++) {
+    float sum = 0.0f;
+    for (uint16_t w = 0; w < TV_N_BASELINE; w++) sum += TV_BASELINE_FEATURES[w][k];
+    float mean = sum / TV_N_BASELINE;
+    float sumSqDiff = 0.0f;
+    for (uint16_t w = 0; w < TV_N_BASELINE; w++) {
+      float d = TV_BASELINE_FEATURES[w][k] - mean;
+      sumSqDiff += d * d;
+    }
+    float stdDev = sqrtf(sumSqDiff / TV_N_BASELINE);
+
+    bool meanOk = nearlyEqual(mean, TV_EXPECTED_MEANS[k]);
+    bool stdOk = nearlyEqual(stdDev, TV_EXPECTED_STDS[k]);
+    meanOk ? passCount++ : failCount++;
+    stdOk ? passCount++ : failCount++;
+    Serial.print((meanOk && stdOk) ? F("  PASS ") : F("  FAIL "));
+    Serial.print(FEATURE_NAMES[k]);
+    Serial.print(F(": 평균 C="));
+    Serial.print(mean, 6);
+    Serial.print(F("/Py="));
+    Serial.print(TV_EXPECTED_MEANS[k], 6);
+    Serial.print(F("  표준편차 C="));
+    Serial.print(stdDev, 6);
+    Serial.print(F("/Py="));
+    Serial.println(TV_EXPECTED_STDS[k], 6);
+  }
+
+  // --- 검증 3: 판별 로직 (3σ judge — 불리언은 정확히 일치해야 함) ---
+  // 파이썬이 계산한 특징값을 그대로 넣어 판별만 격리 검증한다.
+  // (C가 자체 추출한 특징으로 판별하면 경계 근처에서 정밀도 차이로 갈릴 수 있음)
+  Serial.println(F("\n[검증 3] 3-sigma 판별 로직 (is_suspect)"));
+  for (uint8_t k = 0; k < N_FEATURES; k++) {
+    baselineMeans[k] = TV_EXPECTED_MEANS[k];
+    baselineStds[k] = TV_EXPECTED_STDS[k];
+  }
+  isFitted = true;
+  for (uint16_t w = 0; w < TV_N_WINDOWS; w++) {
+    resetConfirmationState();
+    JudgeResult r = judge(TV_EXPECTED_FEATURES[w]);
+    bool ok = (r.isSuspect == TV_EXPECTED_SUSPECT[w]);
+    ok ? passCount++ : failCount++;
+    Serial.print(ok ? F("  PASS ") : F("  FAIL "));
+    Serial.print(TV_LABELS[w]);
+    Serial.print(F(": C="));
+    Serial.print(r.isSuspect ? F("의심") : F("정상"));
+    Serial.print(F(" / Python="));
+    Serial.println(TV_EXPECTED_SUSPECT[w] ? F("의심") : F("정상"));
+  }
+
+  Serial.println(F("\n===== 검증 결과 ====="));
+  Serial.print(F("PASS: "));
+  Serial.print(passCount);
+  Serial.print(F(" / FAIL: "));
+  Serial.println(failCount);
+  if (failCount == 0) {
+    Serial.println(F("전체 통과 — 파이썬과 동일 동작 확인. VALIDATION_MODE를 0으로 되돌려 실센서 모드로 사용하세요."));
+  } else {
+    Serial.println(F("실패 항목 있음 — 이식 코드의 해당 부분을 파이썬과 다시 대조할 것."));
+    Serial.println(F("(자주 나오는 원인: FFT 정규화(2/N) 누락, 대역 경계 부등호, DC bin 포함 여부, n vs n-1 분산)"));
+  }
+}
+#endif  // VALIDATION_MODE
+
 // ==================== 메인 ====================
 float currentWindow[WINDOW_SIZE];
 float currentFeatures[N_FEATURES];
@@ -563,6 +707,13 @@ void setup() {
   delay(1000);
   pinMode(PIN_LED_ALERT, OUTPUT);
   digitalWrite(PIN_LED_ALERT, LOW);
+
+#if VALIDATION_MODE
+  Serial.println(F("=== 엣지알리미 ESP32 v2 — 파이썬 대조 검증 모드 ==="));
+  Serial.println(F("(센서 불필요. 보드만 있으면 실행됨)"));
+  runValidation();
+  return;   // 검증 모드에서는 센서 초기화·감시 루프를 돌지 않음
+#endif
 
   Serial.println(F("=== 엣지알리미 ESP32 v2 (실센서) ==="));
   Serial.println(F("명령: b=baseline 학습, s=상태, x=초기화"));
@@ -589,6 +740,11 @@ void setup() {
 }
 
 void loop() {
+#if VALIDATION_MODE
+  delay(1000);   // 검증은 setup()에서 1회 완료. 재실행하려면 보드 리셋.
+  return;
+#endif
+
   handleSerialCommand();
 
   if (!isFitted) {
