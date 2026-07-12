@@ -1,0 +1,448 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>엣지알리미 — 설비 감시 콘솔</title>
+<style>
+/* ============================================================
+   디자인: 현장 계기판(instrument panel) 무드의 라이트 패널.
+   시그니처 = 타워램프(stack light) + 지표별 z-score VU 미터.
+   데이터 값은 전부 모노스페이스 — 계측기의 언어.
+   폰트는 시스템 스택 (현장/오프라인 데모에서 외부 의존 없음)
+   ============================================================ */
+:root {
+  --base:#ECEEEA; --panel:#F8F9F7; --line:#CBD0C8; --ink:#1F241C;
+  --muted:#6B7265; --ok:#1B7A55; --warn:#B87A12; --alarm:#C23A20;
+  --mono:ui-monospace,'Cascadia Mono','Noto Sans Mono',Consolas,monospace;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+body{background:var(--base);color:var(--ink);
+  font-family:'Pretendard','Apple SD Gothic Neo','Noto Sans KR',system-ui,sans-serif;
+  font-size:14px;line-height:1.5;padding:20px;max-width:1100px;margin:0 auto}
+.eyebrow{font-size:11px;letter-spacing:.14em;color:var(--muted);
+  text-transform:uppercase;font-weight:600}
+.mono{font-family:var(--mono)}
+
+/* ---- 상단 상태 보드 ---- */
+header{display:flex;gap:16px;align-items:stretch;margin-bottom:14px}
+.lamp-col{display:flex;flex-direction:column;gap:6px;padding:12px 10px;
+  background:var(--panel);border:1px solid var(--line);border-radius:6px}
+.lamp{width:22px;height:22px;border-radius:50%;border:1px solid var(--line);
+  background:#E3E5E1;transition:background .3s, box-shadow .3s}
+.lamp.on-alarm{background:var(--alarm);box-shadow:0 0 12px 2px rgba(198,58,32,.55)}
+.lamp.on-warn {background:var(--warn); box-shadow:0 0 10px 2px rgba(184,122,18,.5)}
+.lamp.on-ok   {background:var(--ok);   box-shadow:0 0 10px 2px rgba(27,122,85,.45)}
+.status-main{flex:1;background:var(--panel);border:1px solid var(--line);
+  border-radius:6px;padding:12px 18px;display:flex;flex-direction:column;justify-content:center}
+#statusText{font-size:26px;font-weight:700;letter-spacing:-.01em}
+#statusSub{color:var(--muted);font-size:13px}
+.status-side{display:grid;grid-template-columns:1fr 1fr;gap:8px;min-width:280px}
+.cell{background:var(--panel);border:1px solid var(--line);border-radius:6px;
+  padding:8px 12px}
+.cell b{display:block;font-size:20px;font-weight:600;font-family:var(--mono)}
+
+/* ---- 제어부 ---- */
+.controls{display:flex;flex-wrap:wrap;gap:8px;align-items:center;
+  background:var(--panel);border:1px solid var(--line);border-radius:6px;
+  padding:10px 12px;margin-bottom:14px}
+button{border:1px solid var(--line);background:#fff;color:var(--ink);
+  border-radius:4px;padding:6px 12px;font-size:13px;cursor:pointer;font-family:inherit}
+button:hover{border-color:var(--ink)}
+button.primary{background:var(--ink);color:#fff;border-color:var(--ink)}
+button:focus-visible{outline:2px solid var(--ok);outline-offset:1px}
+button.fault{border-color:#D8B79E}
+input[type=text]{border:1px solid var(--line);border-radius:4px;
+  padding:6px 8px;font-family:var(--mono);font-size:12px;width:190px}
+.sep{width:1px;height:24px;background:var(--line);margin:0 4px}
+label.toggle{display:flex;gap:6px;align-items:center;cursor:pointer}
+
+/* ---- 본문 그리드 ---- */
+.grid{display:grid;grid-template-columns:380px 1fr;gap:14px;margin-bottom:14px}
+@media(max-width:820px){.grid{grid-template-columns:1fr}}
+section{background:var(--panel);border:1px solid var(--line);
+  border-radius:6px;padding:14px 16px}
+section h2{font-size:12px;letter-spacing:.12em;color:var(--muted);
+  font-weight:600;margin-bottom:12px;text-transform:uppercase}
+
+/* ---- 지표 VU 미터 ---- */
+.meter{margin-bottom:13px}
+.meter .row1{display:flex;justify-content:space-between;align-items:baseline}
+.meter .fname{font-weight:600;font-size:13px}
+.meter .fmap{color:var(--muted);font-size:11px;margin-left:6px}
+.meter .zval{font-family:var(--mono);font-size:13px}
+.bar{position:relative;height:14px;background:#E6E8E4;border-radius:3px;
+  margin-top:4px;overflow:hidden}
+.bar .fill{position:absolute;left:0;top:0;bottom:0;background:var(--ok);
+  border-radius:3px;transition:width .25s, background .25s}
+.bar .redline{position:absolute;top:-2px;bottom:-2px;width:2px;
+  background:var(--alarm);left:60%}
+.bar-scale{display:flex;justify-content:space-between;font-size:10px;
+  color:var(--muted);font-family:var(--mono);margin-top:2px}
+
+/* ---- 추세 ---- */
+canvas{width:100%;height:260px;display:block}
+.legend{display:flex;gap:14px;flex-wrap:wrap;margin-top:8px;font-size:12px}
+.legend span{display:inline-flex;align-items:center;gap:5px}
+.swatch{width:14px;height:3px;border-radius:2px;display:inline-block}
+
+/* ---- 로그 ---- */
+#log{font-family:var(--mono);font-size:12px;max-height:180px;
+  overflow-y:auto;white-space:pre-wrap}
+#log .t-alarm{color:var(--alarm)} #log .t-warn{color:var(--warn)}
+#log .t-ok{color:var(--ok)} #log .t-info{color:var(--muted)}
+footer{color:var(--muted);font-size:11px;margin-top:10px}
+@media (prefers-reduced-motion: reduce){*{transition:none!important}}
+</style>
+</head>
+<body>
+
+<div class="eyebrow" style="margin-bottom:8px">엣지알리미 · EDGE PREDICTIVE MAINTENANCE CONSOLE</div>
+
+<header>
+  <div class="lamp-col" title="타워램프: 이상 / 드리프트 주의 / 정상">
+    <div class="lamp" id="lampAlarm"></div>
+    <div class="lamp" id="lampWarn"></div>
+    <div class="lamp" id="lampOk"></div>
+  </div>
+  <div class="status-main">
+    <div id="statusText">대기</div>
+    <div id="statusSub">학습을 시작하면 이 설비의 정상 기준선을 스스로 만듭니다.</div>
+  </div>
+  <div class="status-side">
+    <div class="cell"><span class="eyebrow">회전수 추정</span><b id="rotHz">--.- Hz</b></div>
+    <div class="cell"><span class="eyebrow">환산 RPM</span><b id="rotRpm">----</b></div>
+    <div class="cell"><span class="eyebrow">모드</span><b id="modeTxt" style="font-size:14px">IDLE</b></div>
+    <div class="cell"><span class="eyebrow">데이터 소스</span><b id="srcTxt" style="font-size:14px">데모</b></div>
+  </div>
+</header>
+
+<div class="controls">
+  <label class="toggle"><input type="radio" name="src" value="demo" checked> 데모 시뮬레이터</label>
+  <label class="toggle"><input type="radio" name="src" value="live"> 실장비(ESP32)</label>
+  <input type="text" id="espUrl" value="http://192.168.0.42" aria-label="ESP32 주소">
+  <div class="sep"></div>
+  <button class="primary" id="btnLearn">정상 기준선 학습</button>
+  <button id="btnHist">저장 이력 불러오기</button>
+  <div class="sep"></div>
+  <span class="eyebrow">데모 결함 주입:</span>
+  <button class="fault" data-fault="unbalance">불평형</button>
+  <button class="fault" data-fault="misalign">정렬불량</button>
+  <button class="fault" data-fault="loose">이완</button>
+  <button class="fault" data-fault="hf">고주파</button>
+  <button class="fault" data-fault="drift">완만한 열화</button>
+  <button class="fault" data-fault="stop">설비 정지</button>
+  <button data-fault="none">정상 복귀</button>
+</div>
+
+<div class="grid">
+  <section>
+    <h2>지표별 이탈 정도 (z-score, 3σ 기준선)</h2>
+    <div id="meters"></div>
+  </section>
+  <section>
+    <h2>추세 — 최근 판정 이력</h2>
+    <canvas id="trend" width="640" height="260"></canvas>
+    <div class="legend" id="legend"></div>
+  </section>
+</div>
+
+<section>
+  <h2>이벤트 로그</h2>
+  <div id="log"></div>
+</section>
+
+<footer>
+엣지단(ESP32)은 판정만 하고, 이 콘솔은 어떤 지표가 · 얼마나 · 어떤 추세로 벗어났는지를 보여줍니다 — "이상!" 한 마디보다 해석 가능한 경보가 경보 피로를 줄입니다.
+고주파 지표는 보조용입니다(센서 대역 한계상 베어링 정밀 진단 아님).
+</footer>
+
+<script>
+"use strict";
+/* =====================================================================
+   특징 정의 — 펌웨어 EM_FEATURE_NAMES 와 키/순서 동일 (단일 진실 원칙)
+   ===================================================================== */
+const FEATURES = [
+  {key:"rms",              name:"RMS",  map:"전체 진동 에너지",        color:"#3A5A98"},
+  {key:"harmonic1_energy", name:"1×",   map:"불평형 (unbalance)",      color:"#1B7A55"},
+  {key:"harmonic2_energy", name:"2×",   map:"정렬불량 (misalignment)", color:"#B87A12"},
+  {key:"harmonic3_energy", name:"3×",   map:"이완 (looseness)",        color:"#8A4FA3"},
+  {key:"high_freq_energy", name:"HF",   map:"고주파 · 보조지표",       color:"#C23A20"},
+];
+const SIGMA = 3.0, Z_FULL = 5.0;   /* 미터 풀스케일 5σ, 레드라인 3σ */
+
+/* ---------- 데모 시뮬레이터 (펌웨어 판정 로직의 JS 미러) ---------- */
+const demo = {
+  ratedHz: 50.0,
+  base:  {rms:0.23, harmonic1_energy:0.14, harmonic2_energy:0.010, harmonic3_energy:0.004, high_freq_energy:0.002},
+  noise: {rms:0.006,harmonic1_energy:0.005,harmonic2_energy:0.0007,harmonic3_energy:0.0004,high_freq_energy:0.0002},
+  mult:  {rms:1, harmonic1_energy:1, harmonic2_energy:1, harmonic3_energy:1, high_freq_energy:1},
+  driftOn:false, stopped:false,
+  mode:0, learnN:0, learnTarget:40,
+  stats:null,            // {mean,std} — fit 결과
+  welford:null,
+  originalMeans:null,    // ★ 최초 fit 시 1회만 기록
+  flags:[], CONFIRM_W:5, CONFIRM_T:4,
+  driftBuf:[], DRIFT_W:30, DRIFT_SIGMA:2.0,
+
+  gauss(){let u=0,v=0;while(!u)u=Math.random();while(!v)v=Math.random();
+    return Math.sqrt(-2*Math.log(u))*Math.cos(2*Math.PI*v);},
+
+  sample(){
+    if(this.driftOn){FEATURES.forEach(f=>{if(f.key==="harmonic1_energy")this.mult[f.key]*=1.004;});}
+    const f={};
+    FEATURES.forEach(d=>{f[d.key]=Math.max(0,
+      this.base[d.key]*this.mult[d.key]+this.noise[d.key]*this.gauss());});
+    const rot=this.ratedHz+0.15*this.gauss();
+    return {f, rot};
+  },
+
+  startLearn(){
+    this.mode=1; this.learnN=0;
+    this.welford={n:0,mean:{},m2:{}};
+    FEATURES.forEach(d=>{this.welford.mean[d.key]=0;this.welford.m2[d.key]=0;});
+    this.flags=[]; this.driftBuf=[];
+  },
+
+  step(){
+    const {f,rot}=this.sample();
+    const out={mode:this.mode,learn:0,rot_hz:rot,f,run:1,sfault:0,
+               z:FEATURES.map(()=>0),n_dev:0,flag:0,anomaly:0,drift:0};
+    if(this.stopped){                 /* 정지: 판정·학습 중단 (펌웨어와 동일) */
+      out.run=0; out.rot_hz=0;
+      out.learn=this.mode===2?100:0;
+      this.flags=[];                  /* 재가동 시 낡은 플래그 오염 방지 */
+      return out;
+    }
+    if(this.mode===1){
+      const w=this.welford; w.n++;
+      FEATURES.forEach(d=>{const x=f[d.key],delta=x-w.mean[d.key];
+        w.mean[d.key]+=delta/w.n; w.m2[d.key]+=delta*(x-w.mean[d.key]);});
+      this.learnN++;
+      out.learn=Math.round(100*this.learnN/this.learnTarget);
+      if(this.learnN>=this.learnTarget){
+        this.stats={mean:{},std:{}};
+        FEATURES.forEach(d=>{this.stats.mean[d.key]=w.mean[d.key];
+          this.stats.std[d.key]=Math.max(1e-9,Math.sqrt(w.m2[d.key]/(w.n-1)));});
+        if(!this.originalMeans) this.originalMeans={...this.stats.mean}; /* 1회만 */
+        this.mode=2;
+      }
+    } else if(this.mode===2 && this.stats){
+      out.learn=100;
+      let nDev=0;
+      out.z=FEATURES.map(d=>{
+        const z=(f[d.key]-this.stats.mean[d.key])/this.stats.std[d.key];
+        if(Math.abs(z)>SIGMA)nDev++; return z;});
+      out.n_dev=nDev; out.flag=nDev>=1?1:0;
+      this.flags.push(out.flag); if(this.flags.length>this.CONFIRM_W)this.flags.shift();
+      out.anomaly=(this.flags.length>=this.CONFIRM_W &&
+        this.flags.reduce((a,b)=>a+b,0)>=this.CONFIRM_T)?1:0;
+      this.driftBuf.push({...f}); if(this.driftBuf.length>this.DRIFT_W)this.driftBuf.shift();
+      if(this.originalMeans && this.driftBuf.length>=this.DRIFT_W){
+        for(const d of FEATURES){
+          const roll=this.driftBuf.reduce((a,r)=>a+r[d.key],0)/this.driftBuf.length;
+          if(Math.abs(roll-this.originalMeans[d.key])/this.stats.std[d.key]>this.DRIFT_SIGMA){
+            out.drift=1;break;}
+        }
+      }
+    }
+    out.mode=this.mode;
+    return out;
+  }
+};
+
+/* ---------- UI 구축 ---------- */
+const metersEl=document.getElementById("meters");
+FEATURES.forEach((d,i)=>{
+  const div=document.createElement("div");div.className="meter";
+  div.innerHTML=`<div class="row1">
+      <span><span class="fname">${d.name}</span><span class="fmap">${d.map}</span></span>
+      <span class="zval" id="z${i}">z = --</span></div>
+    <div class="bar"><div class="fill" id="fill${i}"></div>
+      <div class="redline" style="left:${SIGMA/Z_FULL*100}%"></div></div>
+    <div class="bar-scale"><span>0</span><span>3σ</span><span>5σ</span></div>`;
+  metersEl.appendChild(div);
+});
+const legendEl=document.getElementById("legend");
+FEATURES.forEach(d=>{legendEl.innerHTML+=
+  `<span><span class="swatch" style="background:${d.color}"></span>${d.name} ${d.map}</span>`;});
+
+const hist=[]; const HIST_MAX=180;
+const canvas=document.getElementById("trend"),ctx=canvas.getContext("2d");
+
+function drawTrend(){
+  const W=canvas.width,H=canvas.height;
+  ctx.clearRect(0,0,W,H);
+  const pad={l:34,r:8,t:8,b:18},zTop=6;
+  const y=z=>pad.t+(H-pad.t-pad.b)*(1-Math.min(Math.max(z,-1),zTop)/ (zTop+1) - 0/(zTop+1));
+  const yz=z=>{const zc=Math.min(Math.max(z,-1),zTop);
+    return pad.t+(H-pad.t-pad.b)*(1-(zc+1)/(zTop+1));};
+  /* 격자: z=0, 3σ */
+  ctx.strokeStyle="#DDE0DB";ctx.lineWidth=1;ctx.setLineDash([]);
+  [[0,"0"],[3,"3σ"]].forEach(([z,lab])=>{
+    ctx.beginPath();ctx.moveTo(pad.l,yz(z));ctx.lineTo(W-pad.r,yz(z));
+    ctx.strokeStyle=z===3?"#C23A20":"#DDE0DB";ctx.stroke();
+    ctx.fillStyle="#6B7265";ctx.font="10px ui-monospace,monospace";
+    ctx.fillText(lab,4,yz(z)+3);});
+  if(hist.length<2)return;
+  const x=i=>pad.l+(W-pad.l-pad.r)*i/(HIST_MAX-1);
+  /* 이상 확정 구간 음영 */
+  ctx.fillStyle="rgba(198,58,32,.08)";
+  hist.forEach((h,i)=>{if(h.anomaly)ctx.fillRect(x(i),pad.t,
+    (W-pad.l-pad.r)/(HIST_MAX-1)+1,H-pad.t-pad.b);});
+  FEATURES.forEach((d,fi)=>{
+    ctx.beginPath();ctx.strokeStyle=d.color;ctx.lineWidth=1.5;
+    hist.forEach((h,i)=>{const yy=yz(h.z[fi]);
+      i?ctx.lineTo(x(i),yy):ctx.moveTo(x(i),yy);});
+    ctx.stroke();});
+}
+
+const logEl=document.getElementById("log");
+function log(msg,cls="t-info"){
+  const t=new Date().toLocaleTimeString("ko-KR",{hour12:false});
+  logEl.innerHTML=`<div class="${cls}">${t}  ${msg}</div>`+logEl.innerHTML;
+  while(logEl.childElementCount>200)logEl.removeChild(logEl.lastChild);
+}
+
+/* ---------- 상태 렌더 ---------- */
+let prev={anomaly:0,drift:0,mode:-1,run:1,sfault:0};
+function render(o){
+  const modes=["IDLE","LEARNING","MONITORING"];
+  document.getElementById("modeTxt").textContent=modes[o.mode]||"?";
+  document.getElementById("rotHz").textContent=o.rot_hz.toFixed(1)+" Hz";
+  document.getElementById("rotRpm").textContent=Math.round(o.rot_hz*60);
+
+  const st=document.getElementById("statusText"),sub=document.getElementById("statusSub");
+  const la=document.getElementById("lampAlarm"),lw=document.getElementById("lampWarn"),
+        lo=document.getElementById("lampOk");
+  la.className="lamp";lw.className="lamp";lo.className="lamp";
+  if(o.mode===1){st.textContent=`기준선 학습 중 ${o.learn}%`;st.style.color="var(--muted)";
+    sub.textContent="이 설비의 정상 상태를 개별 학습하고 있습니다 (범용 배포의 핵심).";}
+  else if(o.mode!==2){st.textContent="대기";st.style.color="var(--muted)";
+    sub.textContent="학습을 시작하면 이 설비의 정상 기준선을 스스로 만듭니다.";}
+  else if(o.sfault){st.textContent="센서 점검";st.style.color="var(--warn)";
+    lw.classList.add("on-warn");
+    sub.textContent="센서 통신 장애 — 설비 이상이 아니라 배선/센서를 점검하세요.";}
+  else if(o.run===0){st.textContent="설비 정지";st.style.color="var(--muted)";
+    sub.textContent="회전 신호가 없습니다. 정지는 이상이 아니며, 재가동 시 감시가 자동 재개됩니다.";}
+  else if(o.anomaly){st.textContent="이상 확정";st.style.color="var(--alarm)";
+    la.classList.add("on-alarm");
+    const worst=o.z.map((z,i)=>({z:Math.abs(z),i})).sort((a,b)=>b.z-a.z)[0];
+    sub.textContent=`${FEATURES[worst.i].name} (${FEATURES[worst.i].map}) 지표가 ${o.z[worst.i].toFixed(1)}σ 이탈 — 점검 권장`;}
+  else if(o.drift){st.textContent="드리프트 주의";st.style.color="var(--warn)";
+    lw.classList.add("on-warn");
+    sub.textContent="급격한 이상은 아니지만 정상 기준선에서 완만하게 멀어지는 중입니다.";}
+  else{st.textContent="정상";st.style.color="var(--ok)";lo.classList.add("on-ok");
+    sub.textContent="모든 지표가 개별 학습된 정상 범위 내에 있습니다.";}
+
+  FEATURES.forEach((d,i)=>{
+    const z=o.z[i]??0,az=Math.abs(z);
+    document.getElementById("z"+i).textContent="z = "+z.toFixed(2);
+    const fill=document.getElementById("fill"+i);
+    fill.style.width=Math.min(az/Z_FULL,1)*100+"%";
+    fill.style.background=az>SIGMA?"var(--alarm)":az>SIGMA*0.7?"var(--warn)":"var(--ok)";
+  });
+
+  hist.push({z:o.z.slice(),anomaly:o.anomaly});
+  if(hist.length>HIST_MAX)hist.shift();
+  drawTrend();
+
+  if(o.anomaly&&!prev.anomaly)log("이상 확정 (confirm_window 충족)","t-alarm");
+  if(!o.anomaly&&prev.anomaly)log("이상 해제","t-ok");
+  if(o.drift&&!prev.drift)log("드리프트 주의 발생 — 완만한 열화 신호","t-warn");
+  if(o.mode===2&&prev.mode===1)log("기준선 학습 완료 → 감시 시작","t-ok");
+  if(o.run===0&&prev.run!==0)log("설비 정지 감지 — 판정 일시 중단 (오경보 아님)");
+  if(o.run===1&&prev.run===0)log("재가동 감지 — 감시 재개","t-ok");
+  if(o.sfault&&!prev.sfault)log("센서 통신 장애 — 배선 점검 필요","t-warn");
+  prev=o;
+}
+
+/* ---------- 소스 전환 / 루프 ---------- */
+let source="demo", liveFail=0;
+/* 장치(ESP32/Pi)가 이 페이지를 직접 서빙 중이면 같은 출처로 요청 —
+ * CORS/mixed-content 문제가 원천적으로 없음 */
+function baseUrl(){
+  const u=document.getElementById("espUrl").value.trim();
+  return (location.protocol.startsWith("http") && u===location.origin) ? "" : u;
+}
+/* 페이지 로드 시: 장치에서 서빙됐는지 자동 감지 → 실장비 모드 자동 연결 */
+(async()=>{
+  if(!location.protocol.startsWith("http"))return;   /* file:// 은 데모 유지 */
+  try{
+    const r=await fetch("/data",{cache:"no-store"});
+    if(!r.ok)return;
+    const o=await r.json();
+    if(!("mode" in o))return;
+    document.querySelector('input[name=src][value=live]').checked=true;
+    source="live";
+    document.getElementById("espUrl").value=location.origin;
+    document.getElementById("srcTxt").textContent="실장비";
+    log("장치 직접 서빙 감지 — 실장비 모드로 자동 연결","t-ok");
+  }catch(e){/* 감지 실패 시 데모 유지 */}
+})();
+document.querySelectorAll('input[name=src]').forEach(r=>r.addEventListener("change",e=>{
+  source=e.target.value;
+  document.getElementById("srcTxt").textContent=source==="demo"?"데모":"실장비";
+  log(source==="demo"?"데모 시뮬레이터로 전환":"실장비(ESP32) 폴링으로 전환");
+}));
+
+document.getElementById("btnLearn").addEventListener("click",async()=>{
+  if(source==="demo"){demo.startLearn();log("기준선 학습 시작 (데모 40윈도)");}
+  else{
+    try{await fetch(baseUrl()+"/learn?n=120",{method:"POST"});
+      log("ESP32 에 학습 명령 전송 (120윈도, 약 2분)");}
+    catch(e){log("학습 명령 실패: "+e.message,"t-alarm");}
+  }
+});
+
+document.querySelectorAll("button[data-fault]").forEach(b=>b.addEventListener("click",()=>{
+  const k=b.dataset.fault;
+  demo.driftOn=false; demo.stopped=false;
+  demo.mult={rms:1,harmonic1_energy:1,harmonic2_energy:1,harmonic3_energy:1,high_freq_energy:1};
+  const label={unbalance:"불평형(1× 급증)",misalign:"정렬불량(2× 급증)",
+    loose:"이완(2×/3×/4× 동반 상승)",hf:"고주파 이상",drift:"완만한 열화 시작",
+    stop:"설비 정지 — 오경보 없이 '정지' 상태로 표시되어야 함",none:"정상 복귀"}[k];
+  if(k==="unbalance")demo.mult.harmonic1_energy=2.2;
+  if(k==="misalign") demo.mult.harmonic2_energy=3.5;
+  if(k==="loose"){demo.mult.harmonic2_energy=1.8;demo.mult.harmonic3_energy=3.0;}
+  if(k==="hf")demo.mult.high_freq_energy=4.0;
+  if(k==="drift")demo.driftOn=true;
+  if(k==="stop")demo.stopped=true;
+  log("데모 주입: "+label, k==="none"?"t-ok":"t-warn");
+}));
+
+document.getElementById("btnHist").addEventListener("click",async()=>{
+  try{
+    const r=await fetch(baseUrl()+"/history?n="+HIST_MAX,{cache:"no-store"});
+    if(!r.ok)throw new Error("HTTP "+r.status);
+    const arr=await r.json();
+    hist.length=0;
+    arr.forEach(rec=>hist.push({z:rec.z||FEATURES.map(()=>0),anomaly:rec.anomaly||0}));
+    drawTrend();
+    log("저장 이력 "+arr.length+"건 복원 — Pi 도서관 계층","t-ok");
+  }catch(e){
+    log("이력 미제공 — ESP32 직결 상태. 이력은 Pi 서버(pi_server.py) 경유 시 제공","t-warn");
+  }
+});
+
+async function tick(){
+  if(source==="demo"){render(demo.step());}
+  else{
+    try{
+      const r=await fetch(baseUrl()+"/data",{cache:"no-store"});
+      const o=await r.json();
+      /* 펌웨어 JSON 스키마 → 렌더 형식 */
+      render({mode:o.mode,learn:o.learn,rot_hz:o.rot_hz||0,
+        z:o.z||FEATURES.map(()=>0),anomaly:o.anomaly||0,drift:o.drift||0,
+        run:("run" in o)?o.run:1,sfault:o.sfault||0});
+      liveFail=0;
+    }catch(e){
+      if(++liveFail===3)log("ESP32 연결 실패 — 주소/전원 확인","t-alarm");
+    }
+  }
+}
+setInterval(tick,600);
+log("콘솔 시작 — 데모 모드. [정상 기준선 학습] 을 눌러 시작하세요.");
+</script>
+</body>
+</html>
