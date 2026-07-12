@@ -27,11 +27,21 @@ from urllib.parse import urlparse, parse_qs
 
 HIST_RING = 2000          # 메모리 이력 링 크기 (이력 API 용, 파일과 별개)
 
+# PWA 정적 자산: 경로 → (파일명, Content-Type)
+STATIC = {
+    "/manifest.json":        ("manifest.json",        "application/manifest+json"),
+    "/sw.js":                ("sw.js",                "text/javascript"),
+    "/icon-192.png":         ("icon-192.png",         "image/png"),
+    "/icon-512.png":         ("icon-512.png",         "image/png"),
+    "/apple-touch-icon.png": ("apple-touch-icon.png", "image/png"),
+}
+
 state = {
     "esp32": "",
     "latest": {"mode": 0, "offline": 1},
     "ring": deque(maxlen=HIST_RING),
     "dashboard": b"",
+    "static": {},
     "outdir": Path("./logs"),
     "lock": threading.Lock(),
 }
@@ -90,6 +100,9 @@ class Handler(BaseHTTPRequestHandler):
         u = urlparse(self.path)
         if u.path == "/" or u.path == "/index.html":
             self._send(200, state["dashboard"], "text/html; charset=utf-8")
+        elif u.path in state["static"]:
+            body, ctype = state["static"][u.path]
+            self._send(200, body, ctype)
         elif u.path == "/data":
             with state["lock"]:
                 body = json.dumps(state["latest"], ensure_ascii=False).encode()
@@ -135,6 +148,10 @@ def main():
     dash = Path(args.dashboard) if args.dashboard else \
         Path(__file__).resolve().parent.parent / "viz" / "dashboard.html"
     state["dashboard"] = dash.read_bytes()
+    for route, (fname, ctype) in STATIC.items():
+        p = dash.parent / fname
+        if p.exists():
+            state["static"][route] = (p.read_bytes(), ctype)
 
     threading.Thread(target=poller, args=(args.interval,), daemon=True).start()
 

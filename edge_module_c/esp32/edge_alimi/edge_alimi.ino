@@ -173,6 +173,26 @@ static void handle_ui()
                   (const char *)DASHBOARD_HTML_GZ, DASHBOARD_HTML_GZ_LEN);
 }
 
+/* PWA 자산: 폰 홈 화면 설치 지원 (manifest + 아이콘).
+ * 서비스 워커는 http LAN 이 보안 컨텍스트가 아니라 등록되지 않으므로
+ * ESP32 는 sw.js 를 제공하지 않는다 — 설치·전체화면 실행에는 불필요. */
+static void handle_manifest()
+{
+    server.sendHeader("Content-Encoding", "gzip");
+    server.send_P(200, "application/manifest+json",
+                  (const char *)MANIFEST_JSON_GZ, MANIFEST_JSON_GZ_LEN);
+}
+static void handle_icon192()
+{
+    server.send_P(200, "image/png",
+                  (const char *)ICON_192_PNG, ICON_192_PNG_LEN);
+}
+static void handle_icon_apple()
+{
+    server.send_P(200, "image/png",
+                  (const char *)ICON_APPLE_PNG, ICON_APPLE_PNG_LEN);
+}
+
 static void handle_status()
 {
     send_cors();
@@ -288,6 +308,10 @@ void setup()
 
     server.on("/",              HTTP_GET,  handle_ui);
     server.on("/status",        HTTP_GET,  handle_status);
+    server.on("/manifest.json",  HTTP_GET,  handle_manifest);
+    server.on("/icon-192.png",   HTTP_GET,  handle_icon192);
+    server.on("/icon-512.png",   HTTP_GET,  handle_icon192);  /* 192 재사용 */
+    server.on("/apple-touch-icon.png", HTTP_GET, handle_icon_apple);
     server.on("/data",          HTTP_GET,  handle_data);
     server.on("/health",        HTTP_GET,  handle_health);
     server.on("/learn",         HTTP_POST, handle_learn);

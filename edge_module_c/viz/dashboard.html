@@ -4,6 +4,12 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>엣지알리미 — 설비 감시 콘솔</title>
+<link rel="manifest" href="/manifest.json">
+<meta name="theme-color" content="#1F241C">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="엣지알리미">
+<link rel="apple-touch-icon" href="/apple-touch-icon.png">
 <style>
 /* ============================================================
    디자인: 현장 계기판(instrument panel) 무드의 라이트 패널.
@@ -92,6 +98,14 @@ canvas{width:100%;height:260px;display:block}
 #log .t-alarm{color:var(--alarm)} #log .t-warn{color:var(--warn)}
 #log .t-ok{color:var(--ok)} #log .t-info{color:var(--muted)}
 footer{color:var(--muted);font-size:11px;margin-top:10px}
+@media(max-width:640px){
+  body{padding:12px}
+  header{flex-wrap:wrap}
+  .status-side{grid-template-columns:1fr 1fr;min-width:100%}
+  #statusText{font-size:21px}
+  .controls{gap:6px}
+  input[type=text]{width:100%}
+}
 @media (prefers-reduced-motion: reduce){*{transition:none!important}}
 </style>
 </head>
@@ -443,6 +457,14 @@ async function tick(){
 }
 setInterval(tick,600);
 log("콘솔 시작 — 데모 모드. [정상 기준선 학습] 을 눌러 시작하세요.");
+
+/* PWA: 홈 화면 설치 지원. 서비스 워커(오프라인 셸)는 보안 컨텍스트
+ * (HTTPS/localhost)에서만 등록 가능 — 브라우저 정책. LAN http 에서는
+ * 홈 화면 추가·전체화면 실행은 되고, 오프라인 캐시만 생략된다. */
+if("serviceWorker" in navigator &&
+   (location.protocol==="https:" || ["localhost","127.0.0.1"].includes(location.hostname))){
+  navigator.serviceWorker.register("/sw.js").catch(()=>{});
+}
 </script>
 </body>
 </html>

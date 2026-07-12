@@ -10,8 +10,14 @@ import gzip
 from pathlib import Path
 
 root = Path(__file__).resolve().parent.parent
-src = (root / "viz" / "dashboard.html").read_bytes()
+viz = root / "viz"
+src = (viz / "dashboard.html").read_bytes()
 gz = gzip.compress(src, 9)
+
+# PWA 자산 (홈 화면 설치용) — manifest 는 gzip, 아이콘은 이미 압축 포맷
+manifest_gz = gzip.compress((viz / "manifest.json").read_bytes(), 9)
+icon192 = (viz / "icon-192.png").read_bytes()
+icon_apple = (viz / "apple-touch-icon.png").read_bytes()
 
 out = root / "esp32" / "edge_alimi" / "dashboard_html.h"
 lines = [
@@ -26,11 +32,20 @@ lines = [
     "#define PROGMEM",
     "#endif",
     "#endif",
-    f"#define DASHBOARD_HTML_GZ_LEN {len(gz)}u",
-    "static const uint8_t DASHBOARD_HTML_GZ[] PROGMEM = {",
 ]
-for i in range(0, len(gz), 20):
-    lines.append("  " + ",".join(str(b) for b in gz[i:i+20]) + ",")
-lines.append("};")
+
+def emit(name, data):
+    lines.append(f"#define {name}_LEN {len(data)}u")
+    lines.append(f"static const uint8_t {name}[] PROGMEM = {{")
+    for i in range(0, len(data), 20):
+        lines.append("  " + ",".join(str(b) for b in data[i:i+20]) + ",")
+    lines.append("};")
+
+emit("DASHBOARD_HTML_GZ", gz)
+emit("MANIFEST_JSON_GZ", manifest_gz)
+emit("ICON_192_PNG", icon192)
+emit("ICON_APPLE_PNG", icon_apple)
 out.write_text("\n".join(lines) + "\n", encoding="utf-8")
-print(f"embedded: {len(src)} B -> {len(gz)} B gzip -> {out.relative_to(root)}")
+total = len(gz) + len(manifest_gz) + len(icon192) + len(icon_apple)
+print(f"embedded: dashboard {len(src)}B->{len(gz)}B gz + manifest {len(manifest_gz)}B "
+      f"+ icons {len(icon192)+len(icon_apple)}B = 총 {total}B → {out.relative_to(root)}")
