@@ -7,5 +7,11 @@ venv/
 # 실행 결과물 (코드 재실행으로 재생성 가능하므로 커밋하지 않음)
 outputs/
 
+# 공개 데이터셋 원본 (ml/download_data.py로 재다운로드 가능, 총 ~1GB)
+data/
+
+# 학습된 모델 바이너리 (ml/train_models.py로 재생성 가능)
+ml/models/
+
 # OS
 .DS_Store
