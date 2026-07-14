@@ -29,10 +29,12 @@ tools/embed_dashboard.py  대시보드 → 펌웨어 헤더(gzip) 변환기
 |---|---|---|
 | ESP32 단독 | `http://<esp32-ip>/` | 대시보드가 펌웨어에 gzip 내장(8.2KB). Pi 없이도 브라우저 접속만으로 라이브 감시. same-origin 이라 CORS/mixed-content 없음 |
 | Pi 경유 (권장) | `http://<pi-ip>:8080/` | 라이브 + **저장 이력 복원**([저장 이력 불러오기] 버튼 → /history). 3계층 설계의 완성형 |
-| 파일 직접 | dashboard.html 열기 | 장비 없는 데모/발표 백업 (데모 시뮬레이터 모드) |
+| **인터넷 공개 데모** | https://suummu.github.io/edge_module/ | 장비·설치 없이 아무 브라우저/폰에서 접속 — 데모 시뮬레이터 모드로 학습→감시→결함 주입→정지→드리프트 전체 흐름 시연 (HTTPS 라 PWA 오프라인 캐시까지 동작) |
+| 파일 직접 | dashboard.html 열기 | 오프라인 데모/발표 백업 (데모 시뮬레이터 모드) |
 
 콘솔은 로드 시 자기 출처의 /data 를 확인해 **장치 서빙이면 실장비 모드로 자동 연결**된다.
-viz/dashboard.html 수정 후에는 `python3 tools/embed_dashboard.py` 로 펌웨어 헤더를 재생성할 것.
+viz/dashboard.html 수정 후에는 `python3 tools/embed_dashboard.py` 로 펌웨어 헤더를 재생성하고,
+공개 데모용 사본(`docs/index.html` + PWA 자산)도 viz/ 에서 다시 복사할 것 (viz/ 가 단일 원본).
 
 ### 모바일 앱 (PWA — 홈 화면 설치)
 
@@ -66,6 +68,10 @@ original_means 보존**, 타 RPM(1800) + 회전수 ±8% 드리프트 강건성, 
 3. 업로드 → 시리얼에서 IP 확인
 4. `POST http://<ip>/learn?n=120` 으로 정상 기준선 학습 (~2분)
 5. 다른 설비로 이식: `POST /config?rpm=<명판RPM>` 후 재학습 — 코드 수정 불필요
+
+상태변경 API(/learn /config /baseline/clear)는 **POST 전용**이며, 펌웨어의
+`API_KEY` 를 설정하면 `&key=<값>` 이 일치해야만 실행된다 (콘솔의 API 키 입력칸
+사용). 미설정("") 시 검사 생략 — 데모 편의용이며 공유 LAN 투입 시 설정 권장.
 
 core/ 를 수정했으면 `./sync_core.sh` 로 스케치 폴더 사본을 갱신할 것.
 (사본이 어긋나면 파이썬에서 겪은 부분 전파 버그의 재판이 된다.)

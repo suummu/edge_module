@@ -21,6 +21,7 @@
  *   POST /learn?n=120      정상 baseline 학습 시작 (완료 시 NVS 자동 저장)
  *   POST /config?rpm=3000  명판 정격 RPM 변경 (baseline 무효화 + 재학습 필요)
  *   POST /baseline/clear   저장된 baseline 삭제
+ *   (상태변경 3종은 POST 전용이며 API_KEY 설정 시 &key= 일치 필요)
  *
  * 시리얼 명령: 'l' 학습 / 'r<rpm>' 정격 변경 / 'c' baseline 삭제
  *
@@ -45,6 +46,10 @@ extern "C" {
 /* ================= 사용자 설정 ================= */
 static const char *WIFI_SSID = "YOUR_SSID";
 static const char *WIFI_PASS = "YOUR_PASSWORD";
+/* 상태변경 API(/learn /config /baseline/clear) 보호 키.
+ * 요청의 ?key= 값과 일치해야 실행된다. 빈 문자열("")이면 검사 생략(데모용).
+ * LAN 공유 환경에서 감시 무력화(baseline 삭제 등)를 막는 최소 인증. */
+static const char *API_KEY = "";
 
 #define RATED_RPM_DEFAULT  3000.0f   /* 설비 명판 정격 RPM — 유일한 필수 설정 */
 #define SAMPLE_RATE_HZ     1000.0f   /* 목표 샘플링 (실측치로 보정됨) */
@@ -164,6 +169,16 @@ static void send_cors() {
     server.sendHeader("Access-Control-Allow-Origin", "*");
 }
 
+/* 상태변경 요청 공통 키 검사. 실패 시 401 응답까지 처리하고 false 반환 */
+static bool check_api_key()
+{
+    if (API_KEY[0] == '\0') return true;          /* 키 미설정 = 검사 생략 */
+    if (server.hasArg("key") && server.arg("key") == API_KEY) return true;
+    server.send(401, "application/json",
+                "{\"ok\":false,\"reason\":\"unauthorized\"}");
+    return false;
+}
+
 /* 루트 = 감시 콘솔. 현장 사람은 브라우저에 ESP32 주소만 치면 된다.
  * same-origin 서빙이므로 CORS/mixed-content 문제가 원천적으로 없다. */
 static void handle_ui()
@@ -204,7 +219,7 @@ static void handle_status()
     s += g_pipe.cfg.sample_rate_hz;
     s += " | sensor_fault=";
     s += g_sensor_fault ? 1 : 0;
-    s += "\nGET / (console) /data /health, POST /learn?n=120 /config?rpm=3000 /baseline/clear\n";
+    s += "\nGET / (console) /data /health, POST /learn?n=120 /config?rpm=3000 /baseline/clear (+&key= if set)\n";
     server.send(200, "text/plain", s);
 }
 
@@ -233,6 +248,7 @@ static void handle_health()
 static void handle_learn()
 {
     send_cors();
+    if (!check_api_key()) return;
     if (g_sensor_fault) {
         server.send(409, "application/json",
                     "{\"ok\":false,\"reason\":\"sensor_fault\"}");
@@ -246,6 +262,7 @@ static void handle_learn()
 static void handle_config()
 {
     send_cors();
+    if (!check_api_key()) return;
     if (server.hasArg("rpm")) {
         float rpm = server.arg("rpm").toFloat();
         if (rpm > 0) {
@@ -261,6 +278,7 @@ static void handle_config()
 static void handle_baseline_clear()
 {
     send_cors();
+    if (!check_api_key()) return;
     baseline_clear();
     em_detector_init(&g_pipe.det);
     g_pipe.mode = EM_MODE_IDLE;
@@ -314,10 +332,9 @@ void setup()
     server.on("/apple-touch-icon.png", HTTP_GET, handle_icon_apple);
     server.on("/data",          HTTP_GET,  handle_data);
     server.on("/health",        HTTP_GET,  handle_health);
+    /* 상태변경 API 는 POST 전용 — 주소창 접속/링크 미리보기 등 GET 부작용 차단 */
     server.on("/learn",         HTTP_POST, handle_learn);
-    server.on("/learn",         HTTP_GET,  handle_learn);   /* 브라우저 테스트 편의 */
     server.on("/config",        HTTP_POST, handle_config);
-    server.on("/config",        HTTP_GET,  handle_config);
     server.on("/baseline/clear",HTTP_POST, handle_baseline_clear);
     server.begin();
 }

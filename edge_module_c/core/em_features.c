@@ -40,7 +40,14 @@ void em_extract_features(const float *mag,
      * [정직성 주석 / gap ④] MPU-6050 (I2C, 실효 ~수백 Hz 대역) 으로는
      * 베어링 결함의 본진(1~20kHz 충격, 포락선 분석 필요)을 진단할 수 없다.
      * 이 특징은 "고주파 쪽 에너지가 평소와 달라졌다"는 조기경보 보조
-     * 신호일 뿐, 베어링 정밀 진단 기능이 아니다. */
+     * 신호일 뿐, 베어링 정밀 진단 기능이 아니다.
+     *
+     * [의도된 예외] 이 경계(hf_lo)만은 실측 rotation_hz 가 아니라
+     * 명판 정격(rated_hz) 기준 고정이다 — H1/H2/H3 상대 배치 원칙의
+     * 유일한 예외. 고주파 대역은 "평소 대비 총 에너지 변화"를 보는
+     * 광대역 지표라 경계가 회전수 추정 노이즈를 따라 흔들리면 오히려
+     * baseline 분산만 커진다. 단, 인버터로 정격 대비 크게 감속 상시
+     * 운전하는 설비에서는 4x 고조파와 이 경계 사이 간극이 벌어짐을 유의. */
     float hf_lo = em_rated_hz(cfg) * cfg->hf_cutoff_ratio;
     float nyq   = cfg->sample_rate_hz * 0.5f;
     out[EM_F_HF_ENERGY] = band_energy(mag, hf_lo, nyq, bin_hz);

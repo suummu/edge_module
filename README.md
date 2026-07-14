@@ -2,6 +2,10 @@
 
 **인력난 현장을 위한 저비용 엣지 AI 예지보전 모듈** — 설비 고장 전조 감지 시스템
 
+> **라이브 데모 (장비·설치 불필요)**: https://suummu.github.io/edge_module/
+> 브라우저/폰에서 바로 감시 콘솔을 열어 학습→감시→결함 주입→정지→드리프트
+> 전체 흐름을 데모 시뮬레이터로 시연할 수 있다.
+
 회전 기계(모터·팬·펌프·컨베이어)는 고장 전에 진동·전류·온도가 먼저 변한다.
 엣지알리미는 3만 원 이하의 저가 센서 + ESP32로 이 변화를 현장에서 직접 판별해
 고장을 사전 경보한다. 클라우드 없이 센서단에서 즉시 판정하므로,
@@ -26,6 +30,7 @@ edge_module_c/     C/C++ 실장 시스템 — 파이썬 설계를 ESP32 실기�
   pi/                라즈베리파이 서버 (수집·이력·콘솔 서빙)
   viz/               감시 콘솔 (단일 HTML, PWA — 폰 홈 화면 설치)
   tools/             대시보드 → 펌웨어 임베딩 도구
+docs/              GitHub Pages 공개 데모 (viz/ 콘솔의 배포 사본)
 ```
 
 파이썬(`src/`)은 로직을 설계·검증하는 원본이고, C(`edge_module_c/`)는 그것을
@@ -90,6 +95,8 @@ gcc -O2 -Wall -Wextra -o em_test main.c ../core/em_*.c -lm && ./em_test
 #    (WIFI_SSID / RATED_RPM_DEFAULT 수정 — 정격 RPM 이 유일한 필수 설정)
 # 2) 브라우저에서 http://<esp32-ip>/ 접속 → 콘솔이 뜸 (펌웨어 내장 서빙)
 # 3) [정상 기준선 학습] → 약 2분 → 감시 시작 (완료 시 NVS 자동 저장)
+#    상태변경 API(/learn /config /baseline/clear)는 POST 전용,
+#    펌웨어 API_KEY 설정 시 key 파라미터 일치 필요 (공유 LAN 투입 시 권장)
 
 # 선택: Pi 도서관 계층 (이력 축적 + 콘솔 서빙)
 python3 edge_module_c/pi/pi_server.py http://<esp32-ip> --port 8080

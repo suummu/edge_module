@@ -118,8 +118,6 @@ class Handler(BaseHTTPRequestHandler):
             self._send(200, json.dumps(items, ensure_ascii=False).encode())
         elif u.path == "/health":
             self._proxy("/health")
-        elif u.path == "/learn":         # 브라우저 테스트 편의 (펌웨어와 동일 허용)
-            self._proxy(self.path)
         else:
             self._send(404, b'{"error":"not_found"}')
 
