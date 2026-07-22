@@ -79,7 +79,7 @@ def main():
         # 파이썬 쪽도 float32로 낮춘 신호로 계산한다 — 입력을 완전히 동일하게 맞춰서
         # 남는 차이가 "연산 정밀도와 FFT 구현 차이"만 되도록 격리하기 위함.
         sig32 = sig.astype(np.float32).astype(np.float64)
-        f = feat.extract_features(sig32, rotation_hz_estimate=None)  # 독립 추정 (체이닝 없음)
+        f = feat.extract_features(sig32, rotation=None)  # 독립 추정 (체이닝 없음)
         signals.append(sig32)
         expected_features.append([f[k] for k in ACTIVE_FEATURES])
         expected_rotation.append(f["rotation_hz_estimate"])

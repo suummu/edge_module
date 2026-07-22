@@ -264,13 +264,12 @@ def evaluate_confirmed_false_positive_rate(n_windows=200, seed=42):
     detector.reset_confirmation_state()
 
     rng = np.random.default_rng(seed)
-    rotation_estimate = None
+    rot_tracker = feat.RotationTracker()
     confirmed_count = 0
     for _ in range(n_windows):
         window_seed = int(rng.integers(0, 1_000_000))
         _, sig = gen.generate_normal_signal(seed=window_seed)
-        features = feat.extract_features(sig[:WINDOW_SIZE], rotation_hz_estimate=rotation_estimate)
-        rotation_estimate = features["rotation_hz_estimate"]
+        features = feat.extract_features(sig[:WINDOW_SIZE], rotation=rot_tracker)
         result = detector.judge(features)
         if result["is_anomaly"]:
             confirmed_count += 1
@@ -301,21 +300,19 @@ def measure_detection_latency(n_trials=20, fault_strength=0.5, normal_windows_be
                                      features_to_check=ACTIVE_FEATURES)
         detector.fit(normal_features)
         detector.reset_confirmation_state()
-        rotation_estimate = None
+        rot_tracker = feat.RotationTracker()
 
         for _ in range(normal_windows_before):
             window_seed = int(rng.integers(0, 1_000_000))
             _, sig = gen.generate_normal_signal(seed=window_seed)
-            features = feat.extract_features(sig[:WINDOW_SIZE], rotation_hz_estimate=rotation_estimate)
-            rotation_estimate = features["rotation_hz_estimate"]
+            features = feat.extract_features(sig[:WINDOW_SIZE], rotation=rot_tracker)
             detector.judge(features)
 
         detected_at = None
         for i in range(max_windows_after_fault):
             window_seed = int(rng.integers(0, 1_000_000))
             _, sig = gen.generate_faulty_signal(seed=window_seed, fault_strength=fault_strength)
-            features = feat.extract_features(sig[:WINDOW_SIZE], rotation_hz_estimate=rotation_estimate)
-            rotation_estimate = features["rotation_hz_estimate"]
+            features = feat.extract_features(sig[:WINDOW_SIZE], rotation=rot_tracker)
             result = detector.judge(features)
             if result["is_anomaly"]:
                 detected_at = i + 1  # 고장 시작 후 몇 번째 윈도우에서 확정됐는지 (1-based)
@@ -366,12 +363,11 @@ if __name__ == "__main__":
 
     print("\n=== 연속성 필터링 테스트 (확정 이상으로 격상되는 과정) ===")
     detector.reset_confirmation_state()
-    rotation_estimate = None  # 연속 스트림이므로 윈도우 간 회전수 추정을 체이닝
+    rot_tracker = feat.RotationTracker()  # 연속 스트림이므로 윈도우 간 회전수 추정을 체이닝
     print("동일한 심각한 고장 신호를 연속 5개 윈도우에 걸쳐 넣어봄:")
     for i in range(5):
         _, sig = gen.generate_faulty_signal(seed=500 + i, fault_strength=0.9)
-        features = feat.extract_features(sig[:WINDOW_SIZE], rotation_hz_estimate=rotation_estimate)
-        rotation_estimate = features["rotation_hz_estimate"]
+        features = feat.extract_features(sig[:WINDOW_SIZE], rotation=rot_tracker)
         result = detector.judge(features)
         print(f"  윈도우 {i+1}: 1차의심={result['is_suspect']}  "
               f"확정이상={result['is_anomaly']}  "
@@ -379,12 +375,11 @@ if __name__ == "__main__":
 
     print("\n=== 위험 정상화(서서히 나빠짐) 시나리오 테스트 ===")
     detector.reset_confirmation_state()
-    rotation_estimate = None  # 연속 스트림이므로 윈도우 간 회전수 추정을 체이닝
+    rot_tracker = feat.RotationTracker()  # 연속 스트림이므로 윈도우 간 회전수 추정을 체이닝
     signals, strengths = gen.generate_progressive_wear_sequence(n_windows=10, final_fault_strength=0.9, seed=7)
     print("50 윈도우 전체 대신, 대표로 10단계만 보여줌 (fault_strength 0 -> 0.9로 서서히 증가):")
     for i, (sig, strength) in enumerate(zip(signals, strengths)):
-        features = feat.extract_features(sig[:WINDOW_SIZE], rotation_hz_estimate=rotation_estimate)
-        rotation_estimate = features["rotation_hz_estimate"]
+        features = feat.extract_features(sig[:WINDOW_SIZE], rotation=rot_tracker)
         result = detector.judge(features)
         drift_flag = " <- 위험 정상화 경고!" if result["drift_warnings"] else ""
         print(f"  단계{i+1:2d} (진행도={strength:.2f}): 1차의심={result['is_suspect']}{drift_flag}")
