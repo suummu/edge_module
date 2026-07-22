@@ -256,6 +256,59 @@ static void test_generic_rpm(void)
     check(detected, "RPM 변동 후에도 불평형 감지");
 }
 
+/* ---------- [5b] 계단형 속도 변경: 기준축 영구 락 방지 ----------
+ * [5] 는 ±8% 드리프트만 훑는데, 그 폭은 rot_max_jump_hz(5Hz) 아래라
+ * 점프 거부가 아예 발생하지 않는다(거부 0회). 즉 거부 해제 경로를
+ * 검사하지 못한다. 가변전압/VFD 로 회전수를 한 번에 크게 바꾸는 경우가
+ * 실제 시연 시나리오이므로 계단형 변화를 따로 검사한다. */
+static void test_step_speed_change(void)
+{
+    printf("\n[5b] 계단형 속도 변경 — 기준축 re-lock\n");
+    em_pipeline_t p; em_output_t o; sim_t g;
+    em_pipeline_init(&p, RATED_RPM);
+    p.cfg.sample_rate_hz = FS;
+    sim_init_normal(&g, 50.0f, 777u);
+    run_learning(&p, &g);
+
+    float before = p.rot.hz;
+
+    /* 산발적 노이즈: 매번 다른 곳에 튀는 후보는 계속 거부돼야 한다 */
+    const float spikes[6] = { 68.0f, 32.0f, 67.0f, 31.0f, 69.0f, 33.0f };
+    for (int i = 0; i < 6; i++) {
+        g.rotation_hz = spikes[i];
+        sim_fill_window(&g, FS, sigbuf, EM_FFT_SIZE);
+        em_pipeline_process(&p, sigbuf, &o);
+    }
+    check(fabsf(p.rot.hz - before) < 1.0f,
+          "산발적 노이즈에 기준축이 끌려가지 않음");
+
+    /* 계단형 변경: 62Hz 로 바꾼 뒤 계속 그 속도로 운전 */
+    g.rotation_hz = 62.0f;
+    sim_fill_window(&g, FS, sigbuf, EM_FFT_SIZE);
+    em_pipeline_process(&p, sigbuf, &o);
+    check(fabsf(p.rot.hz - before) < 1.0f, "단발 변화를 즉시 수용하지 않음");
+
+    for (int w = 0; w < 40; w++) {
+        sim_fill_window(&g, FS, sigbuf, EM_FFT_SIZE);
+        em_pipeline_process(&p, sigbuf, &o);
+    }
+    printf("  변경 전 %.2f Hz → 40윈도 후 %.2f Hz (실제 62.00 Hz)\n",
+           (double)before, (double)p.rot.hz);
+    check(fabsf(p.rot.hz - 62.0f) < 1.5f,
+          "지속된 속도 변경을 수용 (re-lock 없으면 옛 값에 영구 고정)");
+
+    /* 새 운전점 기준으로 하모닉 대역이 다시 맞는지 — 재학습 후 결함 감지 */
+    run_learning(&p, &g);
+    inject_unbalance(&g);
+    int detected = 0;
+    for (int w = 0; w < 60 && !detected; w++) {
+        sim_fill_window(&g, FS, sigbuf, EM_FFT_SIZE);
+        em_pipeline_process(&p, sigbuf, &o);
+        if (o.verdict.is_anomaly) detected = 1;
+    }
+    check(detected, "새 운전점에서 재학습 후 불평형 감지");
+}
+
 /* ---------- [6] JSON 직렬화 스모크 ---------- */
 static void test_json(void)
 {
@@ -402,6 +455,7 @@ int main(void)
     test_drift();
     test_refit_preserves_original();
     test_generic_rpm();
+    test_step_speed_change();
     test_json();
     test_machine_stop();
     test_snapshot();

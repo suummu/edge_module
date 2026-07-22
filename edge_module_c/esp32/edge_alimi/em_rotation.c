@@ -6,6 +6,7 @@ void em_rotation_init(em_rotation_t *rt)
 {
     rt->hz = 0.0f;
     rt->valid = false;
+    rt->pending_hz = 0.0f;
     rt->rejected = 0;
 }
 
@@ -56,13 +57,32 @@ float em_rotation_accept(em_rotation_t *rt,
                          float candidate_hz,
                          const em_config_t *cfg)
 {
-    if (!rt->valid) {
+    if (!rt->valid) {                    /* 최초 추정 — 무조건 채택 */
         rt->hz = candidate_hz;
         rt->valid = true;
-    } else if (fabsf(candidate_hz - rt->hz) > cfg->rot_max_jump_hz) {
-        rt->rejected++;        /* 급격한 점프 → 노이즈로 무시, 이전 값 유지 */
-    } else {
+        return rt->hz;
+    }
+
+    if (fabsf(candidate_hz - rt->hz) <= cfg->rot_max_jump_hz) {
         rt->hz = candidate_hz;
+        rt->rejected = 0;                /* 정상 추종 — 누적 거부 해제 */
+        rt->pending_hz = 0.0f;
+        return rt->hz;
+    }
+
+    /* 급격한 점프 → 일단 거부하되, 같은 자리에 연속으로 나타나는지 본다.
+     * 노이즈는 매번 다른 곳에 튀고, 실제 속도 변화는 한 자리에 머문다. */
+    if (rt->rejected > 0 &&
+        fabsf(candidate_hz - rt->pending_hz) <= cfg->rot_max_jump_hz)
+        rt->rejected++;
+    else
+        rt->rejected = 1;
+    rt->pending_hz = candidate_hz;
+
+    if (rt->rejected >= cfg->rot_relock_windows) {
+        rt->hz = candidate_hz;           /* 지속된 변화 — 새 운전점 수용 */
+        rt->rejected = 0;
+        rt->pending_hz = 0.0f;
     }
     return rt->hz;
 }

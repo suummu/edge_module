@@ -56,6 +56,9 @@ typedef struct {
     float rot_search_lo_ratio; /* 탐색 하한 = 정격Hz * lo_ratio */
     float rot_search_hi_ratio; /* 탐색 상한 = 정격Hz * hi_ratio */
     float rot_max_jump_hz;     /* 이전 추정 대비 이 이상 점프 → 노이즈로 무시 */
+    int   rot_relock_windows;  /* 거부된 후보가 같은 자리에 이 횟수만큼 연속
+                                * 나타나면 실제 속도 변경으로 보고 수용(re-lock).
+                                * 없으면 계단형 속도 변화 후 기준축이 영구 고정됨 */
 
     /* 고조파 대역 (rotation_hz_estimate 기준 상대 배치) */
     float harmonic_bw_hz;      /* 각 고조파 대역 반폭(±) */

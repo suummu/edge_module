@@ -1,5 +1,13 @@
 # c/ — 순수 C(C99) 구현
 
+> **[알려진 발산 — 2026-07-22] 이 구현의 회전수 체이닝 경로는 신뢰하지 말 것.**
+> `ea_estimate_rotation_hz()`의 `previous_estimate` 경로는 계단형 속도 변경 시
+> 기준축이 옛 값에 영구 고정되는 결함을 그대로 갖고 있다. 파이썬(`RotationTracker`)과
+> 실장 정본(`edge_module_c/core/em_rotation.c`)은 re-lock 으로 수정했으나, 이 파일은
+> 정본이 아니라 `core/` 로 흡수 예정이라 패치하지 않았다. 수치 대조 검증
+> (`validate_main.c`)은 `independent=true` 무상태 경로만 쓰므로 영향이 없고
+> 56/56 그대로 통과한다.
+
 파이썬으로 검증한 판별 파이프라인을 외부 라이브러리 없이 순수 C로 구현한 것.
 Arduino(.ino, C++) 버전과 별개로, ESP-IDF(공식 C 프레임워크)나 다른 MCU로 갈 때
 그대로 쓸 수 있고, PC에서도 컴파일·검증된다.
