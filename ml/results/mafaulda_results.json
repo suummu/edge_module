@@ -1,0 +1,135 @@
+{
+  "dataset": "mafaulda",
+  "n_windows": 1044,
+  "label_counts": {
+    "normal": 348,
+    "imbalance": 348,
+    "misalignment": 348
+  },
+  "n_train_files": 25,
+  "n_test_files": 11,
+  "feature_names": [
+    "rms",
+    "kurtosis",
+    "harmonic1_ratio",
+    "harmonic2_ratio",
+    "harmonic3_ratio",
+    "high_freq_ratio"
+  ],
+  "anomaly_detection": {
+    "three_sigma": {
+      "detection_rate__imbalance": 0.7443,
+      "detection_rate__misalignment": 0.569,
+      "false_positive_rate__normal": 0.0
+    },
+    "isolation_forest": {
+      "detection_rate__imbalance": 0.6293,
+      "detection_rate__misalignment": 0.3908,
+      "false_positive_rate__normal": 0.0069
+    },
+    "n_train_normal_windows": 204,
+    "three_sigma_speed_binned": {
+      "detection_rate__imbalance": 0.9023,
+      "detection_rate__misalignment": 0.8247,
+      "false_positive_rate__normal": 0.0
+    },
+    "three_sigma_by_severity": {
+      "horizontal-misalignment/1.0mm": 0.3793,
+      "horizontal-misalignment/2.0mm": 0.7586,
+      "imbalance/35g": 0.9885,
+      "imbalance/6g": 0.5
+    },
+    "three_sigma_confirmed": {
+      "false_positive_rate__normal": 0.0,
+      "fault_files_alarmed": "16/24"
+    }
+  },
+  "classification": {
+    "decision_tree_d4": {
+      "accuracy": 0.7147,
+      "macro_f1": 0.7107,
+      "confusion_matrix": [
+        [
+          87,
+          26,
+          32
+        ],
+        [
+          0,
+          58,
+          0
+        ],
+        [
+          1,
+          32,
+          83
+        ]
+      ],
+      "labels": [
+        "imbalance",
+        "misalignment",
+        "normal"
+      ]
+    },
+    "logistic_regression": {
+      "accuracy": 0.6176,
+      "macro_f1": 0.5947,
+      "confusion_matrix": [
+        [
+          99,
+          44,
+          2
+        ],
+        [
+          0,
+          31,
+          27
+        ],
+        [
+          0,
+          49,
+          67
+        ]
+      ],
+      "labels": [
+        "imbalance",
+        "misalignment",
+        "normal"
+      ]
+    },
+    "random_forest": {
+      "accuracy": 0.7241,
+      "macro_f1": 0.7195,
+      "confusion_matrix": [
+        [
+          88,
+          26,
+          31
+        ],
+        [
+          0,
+          58,
+          0
+        ],
+        [
+          0,
+          31,
+          85
+        ]
+      ],
+      "labels": [
+        "imbalance",
+        "misalignment",
+        "normal"
+      ]
+    },
+    "feature_importance_rf": {
+      "rms": 0.2429,
+      "kurtosis": 0.1018,
+      "harmonic1_ratio": 0.2506,
+      "harmonic2_ratio": 0.0786,
+      "harmonic3_ratio": 0.127,
+      "high_freq_ratio": 0.1991
+    }
+  }
+}

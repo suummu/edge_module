@@ -16,6 +16,7 @@ void em_config_default(em_config_t *cfg, float rated_rpm)
     cfg->rot_search_lo_ratio = 0.6f;
     cfg->rot_search_hi_ratio = 1.4f;
     cfg->rot_max_jump_hz     = 5.0f;
+    cfg->rot_relock_windows  = 5;      /* 약 5초간 유지되면 새 운전점 */
 
     cfg->harmonic_bw_hz      = 3.0f;
     cfg->hf_cutoff_ratio     = 4.5f;   /* 4x 고조파 위쪽부터 고주파 취급 */

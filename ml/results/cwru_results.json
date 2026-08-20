@@ -1,0 +1,157 @@
+{
+  "dataset": "cwru",
+  "n_windows": 2913,
+  "label_counts": {
+    "normal": 824,
+    "inner_race": 697,
+    "ball": 696,
+    "outer_race": 696
+  },
+  "n_train_files": 28,
+  "n_test_files": 12,
+  "feature_names": [
+    "rms",
+    "kurtosis",
+    "harmonic1_ratio",
+    "harmonic2_ratio",
+    "harmonic3_ratio",
+    "high_freq_ratio"
+  ],
+  "anomaly_detection": {
+    "three_sigma": {
+      "detection_rate__ball": 1.0,
+      "detection_rate__inner_race": 1.0,
+      "false_positive_rate__normal": 0.0483,
+      "detection_rate__outer_race": 1.0
+    },
+    "isolation_forest": {
+      "detection_rate__ball": 1.0,
+      "detection_rate__inner_race": 1.0,
+      "false_positive_rate__normal": 0.0242,
+      "detection_rate__outer_race": 1.0
+    },
+    "n_train_normal_windows": 493,
+    "three_sigma_confirmed": {
+      "false_positive_rate__normal": 0.0181,
+      "fault_files_alarmed": "36/36"
+    }
+  },
+  "classification": {
+    "decision_tree_d4": {
+      "accuracy": 0.8576,
+      "macro_f1": 0.8342,
+      "confusion_matrix": [
+        [
+          98,
+          18,
+          0,
+          0
+        ],
+        [
+          13,
+          234,
+          0,
+          102
+        ],
+        [
+          0,
+          0,
+          353,
+          0
+        ],
+        [
+          0,
+          0,
+          0,
+          116
+        ]
+      ],
+      "labels": [
+        "ball",
+        "inner_race",
+        "normal",
+        "outer_race"
+      ]
+    },
+    "logistic_regression": {
+      "accuracy": 0.9122,
+      "macro_f1": 0.8938,
+      "confusion_matrix": [
+        [
+          115,
+          1,
+          0,
+          0
+        ],
+        [
+          21,
+          270,
+          0,
+          58
+        ],
+        [
+          0,
+          0,
+          351,
+          2
+        ],
+        [
+          0,
+          0,
+          0,
+          116
+        ]
+      ],
+      "labels": [
+        "ball",
+        "inner_race",
+        "normal",
+        "outer_race"
+      ]
+    },
+    "random_forest": {
+      "accuracy": 0.8223,
+      "macro_f1": 0.7916,
+      "confusion_matrix": [
+        [
+          116,
+          0,
+          0,
+          0
+        ],
+        [
+          64,
+          183,
+          0,
+          102
+        ],
+        [
+          0,
+          0,
+          353,
+          0
+        ],
+        [
+          0,
+          0,
+          0,
+          116
+        ]
+      ],
+      "labels": [
+        "ball",
+        "inner_race",
+        "normal",
+        "outer_race"
+      ]
+    },
+    "feature_importance_rf": {
+      "rms": 0.3923,
+      "kurtosis": 0.1172,
+      "harmonic1_ratio": 0.0815,
+      "harmonic2_ratio": 0.0958,
+      "harmonic3_ratio": 0.0864,
+      "high_freq_ratio": 0.2268
+    }
+  }
+}
