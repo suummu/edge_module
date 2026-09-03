@@ -33,13 +33,18 @@ extern "C" {
  * (파이썬에서 reference_comparison/visualize 가 로컬 리스트를
  *  재정의하다 어긋났던 문제의 C측 재발 방지책) */
 typedef enum {
-    EM_F_RMS = 0,          /* 전체 진동 에너지 (시간영역) */
-    EM_F_H1_ENERGY,        /* 1x 대역 — 불평형(unbalance) */
-    EM_F_H2_ENERGY,        /* 2x 대역 — 정렬불량(misalignment) */
-    EM_F_H3_ENERGY,        /* 3x 대역 — 기계적 이완(looseness, 2x/3x/4x 계열) */
-    EM_F_HF_ENERGY         /* 고주파 대역 — 보조 지표.
-                            * 주의: MPU-6050 대역폭(~1kHz) 한계로
-                            * 베어링 정밀 진단이 아님. 조기경보 보조용. */
+    EM_F_RMS = 0,          /* 전체 진동 에너지 (시간영역, 절대량) */
+    EM_F_H1_ENERGY,        /* [v2] 1x 대역 에너지 / 전체 에너지 "비율" — 불평형 */
+    EM_F_H2_ENERGY,        /* [v2] 2x 대역 비율 — 정렬불량(misalignment) */
+    EM_F_H3_ENERGY,        /* [v2] 3x 대역 비율 — 기계적 이완(looseness) */
+    EM_F_HF_ENERGY         /* [v2] 고주파 대역 비율 — 보조 지표.
+                            * 상한은 센서 유효대역(sensor_bw_hz) 안쪽으로 제한.
+                            * 베어링 정밀 진단이 아님. 조기경보 보조용.
+                            *
+                            * [v2 비율 정규화 근거] ml/features_real.py 검증
+                            * (90.2/82.5%)이 비율 특징 기준 → 실장도 비율로 통일.
+                            * 부가 효과: 회전수 변화의 전체 진폭 변동(∝RPM²)이
+                            * 분자·분모에서 상쇄 → 가변속 설비 단일 baseline 가능 */
 } em_feature_id_t;
 
 extern const char *EM_FEATURE_NAMES[EM_NUM_FEATURES];
@@ -61,8 +66,15 @@ typedef struct {
                                 * 없으면 계단형 속도 변화 후 기준축이 영구 고정됨 */
 
     /* 고조파 대역 (rotation_hz_estimate 기준 상대 배치) */
-    float harmonic_bw_hz;      /* 각 고조파 대역 반폭(±) */
+    float harmonic_bw_hz;      /* 각 고조파 대역 반폭(±).
+                                * [v2] 물리 허용오차 5Hz + Hann 주엽 2bin.
+                                * 주엽이 대역에 온전히 들어와야 회전수가 bin
+                                * 경계에 있어도 에너지 포획률이 유지됨 */
     float hf_cutoff_ratio;     /* 고주파 대역 시작 = 정격Hz * ratio (예: 4.5) */
+    float sensor_bw_hz;        /* [v2] 센서 유효 대역 (MPU-6050 DLPF=0 → 260Hz).
+                                * HF 상한 = min(Nyquist, sensor_bw_hz - 5).
+                                * 기존 Nyquist(500Hz) 상한은 필터 감쇠 구간의
+                                * 센서 노이즈를 특징으로 재고 있었음 (gap ⑤) */
 
     /* 3-시그마 판정 */
     float sigma_threshold;     /* 기본 3.0 */

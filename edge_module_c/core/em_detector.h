@@ -64,7 +64,9 @@ typedef struct {
  * magic/version/특징 수/체크섬 검증으로 손상·버전 불일치 로드를 거부.
  */
 #define EM_SNAPSHOT_MAGIC   0x454D4231u   /* "EMB1" */
-#define EM_SNAPSHOT_VERSION 1u
+#define EM_SNAPSHOT_VERSION 2u   /* [v2] baseline 이 log 공간 + 비율 특징 —
+                                  * v1 스냅샷(선형·절대 에너지)과 비호환이므로
+                                  * 버전 승급으로 구버전 로드를 거부한다 */
 
 typedef struct {
     uint32_t magic;

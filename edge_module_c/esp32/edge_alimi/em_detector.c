@@ -3,6 +3,28 @@
 #include <string.h>
 #include <stddef.h>
 
+/*
+ * [v2] 판정 공간 변환 — log(x + eps).
+ * 대역 에너지/비율은 오른쪽 꼬리가 긴 분포(χ²형)라 선형 3σ 상단이
+ * 정상 상태에서도 자주 뚫린다 (시뮬레이션 실측: 오탐 1.41% → 0.31%).
+ * log 변환 후에는 분포가 대칭에 가까워져 ±3σ 가 통계적으로 타당해진다.
+ * baseline 통계(fit)·판정(update)·드리프트가 전부 같은 공간을 쓰므로
+ * 스냅샷(mean/stdv)도 log 공간 값으로 저장된다.
+ */
+#define EM_LOG_EPS 1e-6f
+
+static inline float em_to_z_space(float x)
+{
+    if (x < 0.0f) x = 0.0f;   /* 특징은 정의상 비음수 — 방어 */
+    return logf(x + EM_LOG_EPS);
+}
+
+static void em_transform_features(const float *in, float *out)
+{
+    for (int i = 0; i < EM_NUM_FEATURES; i++)
+        out[i] = em_to_z_space(in[i]);
+}
+
 void em_detector_init(em_detector_t *d)
 {
     memset(d, 0, sizeof(*d));
@@ -21,9 +43,11 @@ void em_detector_fit_begin(em_detector_t *d)
 
 void em_detector_fit_add(em_detector_t *d, const float *features)
 {
+    float t[EM_NUM_FEATURES];
+    em_transform_features(features, t);   /* [v2] log 공간에서 통계 축적 */
     d->fit_n++;
     for (int i = 0; i < EM_NUM_FEATURES; i++) {
-        double x = (double)features[i];
+        double x = (double)t[i];
         double delta = x - d->w_mean[i];
         d->w_mean[i] += delta / (double)d->fit_n;
         d->w_m2[i]   += delta * (x - d->w_mean[i]);
@@ -121,6 +145,9 @@ void em_detector_update(em_detector_t *d,
     memset(out, 0, sizeof(*out));
     if (!d->fitted) return;   /* 학습 전에는 판정하지 않음 */
 
+    float tf[EM_NUM_FEATURES];
+    em_transform_features(features, tf);  /* [v2] 판정도 같은 log 공간에서 */
+
     int cw = cfg->confirm_window;
     if (cw > EM_MAX_CONFIRM_WIN) cw = EM_MAX_CONFIRM_WIN;
     if (cw < 1) cw = 1;
@@ -131,7 +158,7 @@ void em_detector_update(em_detector_t *d,
     /* 1) z-score */
     int n_dev = 0;
     for (int i = 0; i < EM_NUM_FEATURES; i++) {
-        out->z[i] = (features[i] - d->mean[i]) / d->stdv[i];
+        out->z[i] = (tf[i] - d->mean[i]) / d->stdv[i];
         if (fabsf(out->z[i]) > cfg->sigma_threshold) n_dev++;
     }
     out->n_deviated  = n_dev;
@@ -150,7 +177,7 @@ void em_detector_update(em_detector_t *d,
 
     /* 3) 드리프트 감시 — 롤링 평균 vs original baseline
      * (구조 확정, drift_sigma/drift_window 는 실기기 데이터 확보 후 튜닝) */
-    memcpy(d->drift_buf[d->drift_write_idx], features,
+    memcpy(d->drift_buf[d->drift_write_idx], tf,
            sizeof(float) * EM_NUM_FEATURES);
     d->drift_write_idx = (d->drift_write_idx + 1) % dw;
     if (d->drift_filled < dw) d->drift_filled++;

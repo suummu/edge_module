@@ -26,29 +26,29 @@ void em_extract_features(const float *mag,
     /* 회전수 추정이 아직 없으면 명판 정격으로 폴백 (콜드스타트 안전) */
     float f1 = (rotation_hz > 0.0f) ? rotation_hz : em_rated_hz(cfg);
 
-    out[EM_F_RMS]       = rms;
+    out[EM_F_RMS] = rms;   /* 유일한 절대량 특징 — 가동/정지·절대한계 참조용 */
+
+    /* [v2] 전체 스펙트럼 에너지 (DC 제외) — 비율 정규화의 분모.
+     * ml/features_real.py 의 spectrum_total_energy 와 동일 정의. */
+    float e_total = 0.0f;
+    for (int k = 1; k < EM_NUM_BINS; k++) e_total += mag[k] * mag[k];
+    if (e_total < 1e-20f) e_total = 1e-20f;
 
     /* 1x — 불평형(unbalance) */
-    out[EM_F_H1_ENERGY] = band_energy(mag, 1.0f * f1 - bw, 1.0f * f1 + bw, bin_hz);
+    out[EM_F_H1_ENERGY] = band_energy(mag, 1.0f * f1 - bw, 1.0f * f1 + bw, bin_hz) / e_total;
     /* 2x — 정렬불량(misalignment) */
-    out[EM_F_H2_ENERGY] = band_energy(mag, 2.0f * f1 - bw, 2.0f * f1 + bw, bin_hz);
+    out[EM_F_H2_ENERGY] = band_energy(mag, 2.0f * f1 - bw, 2.0f * f1 + bw, bin_hz) / e_total;
     /* 3x — 기계적 이완(looseness). 이완은 2x/3x/4x 계열로 나타나므로
      * H2 와 함께 상승하는 패턴이 이완의 시그니처가 된다. */
-    out[EM_F_H3_ENERGY] = band_energy(mag, 3.0f * f1 - bw, 3.0f * f1 + bw, bin_hz);
+    out[EM_F_H3_ENERGY] = band_energy(mag, 3.0f * f1 - bw, 3.0f * f1 + bw, bin_hz) / e_total;
 
-    /* 고주파 대역 — 보조 지표.
-     * [정직성 주석 / gap ④] MPU-6050 (I2C, 실효 ~수백 Hz 대역) 으로는
-     * 베어링 결함의 본진(1~20kHz 충격, 포락선 분석 필요)을 진단할 수 없다.
-     * 이 특징은 "고주파 쪽 에너지가 평소와 달라졌다"는 조기경보 보조
-     * 신호일 뿐, 베어링 정밀 진단 기능이 아니다.
-     *
-     * [의도된 예외] 이 경계(hf_lo)만은 실측 rotation_hz 가 아니라
-     * 명판 정격(rated_hz) 기준 고정이다 — H1/H2/H3 상대 배치 원칙의
-     * 유일한 예외. 고주파 대역은 "평소 대비 총 에너지 변화"를 보는
-     * 광대역 지표라 경계가 회전수 추정 노이즈를 따라 흔들리면 오히려
-     * baseline 분산만 커진다. 단, 인버터로 정격 대비 크게 감속 상시
-     * 운전하는 설비에서는 4x 고조파와 이 경계 사이 간극이 벌어짐을 유의. */
+    /* 고주파 대역 — 보조 지표 (베어링 정밀진단 아님).
+     * [v2] 상한을 Nyquist 가 아니라 센서 유효대역(sensor_bw_hz - 5Hz 여유)으로
+     * 제한 — DLPF 감쇠 구간의 센서 노이즈를 재지 않는다 (gap ⑤).
+     * 하한은 명판 정격 기준 고정(회전수 노이즈로 경계가 흔들리는 것 방지). */
     float hf_lo = em_rated_hz(cfg) * cfg->hf_cutoff_ratio;
-    float nyq   = cfg->sample_rate_hz * 0.5f;
-    out[EM_F_HF_ENERGY] = band_energy(mag, hf_lo, nyq, bin_hz);
+    float hf_hi = cfg->sample_rate_hz * 0.5f;
+    float bw_cap = cfg->sensor_bw_hz - 5.0f;
+    if (bw_cap > 0.0f && hf_hi > bw_cap) hf_hi = bw_cap;
+    out[EM_F_HF_ENERGY] = band_energy(mag, hf_lo, hf_hi, bin_hz) / e_total;
 }

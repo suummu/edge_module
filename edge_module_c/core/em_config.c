@@ -2,10 +2,10 @@
 
 const char *EM_FEATURE_NAMES[EM_NUM_FEATURES] = {
     "rms",
-    "harmonic1_energy",
-    "harmonic2_energy",
-    "harmonic3_energy",
-    "high_freq_energy"
+    "harmonic1_ratio",
+    "harmonic2_ratio",
+    "harmonic3_ratio",
+    "high_freq_ratio"
 };
 
 void em_config_default(em_config_t *cfg, float rated_rpm)
@@ -18,8 +18,10 @@ void em_config_default(em_config_t *cfg, float rated_rpm)
     cfg->rot_max_jump_hz     = 5.0f;
     cfg->rot_relock_windows  = 5;      /* 약 5초간 유지되면 새 운전점 */
 
-    cfg->harmonic_bw_hz      = 3.0f;
+    /* [v2] 반폭 = 물리 허용오차 5Hz + Hann 주엽 2bin (1024pt@1kHz ≈ 0.977Hz/bin) */
+    cfg->harmonic_bw_hz      = 5.0f + 2.0f * (1000.0f / (float)EM_FFT_SIZE);
     cfg->hf_cutoff_ratio     = 4.5f;   /* 4x 고조파 위쪽부터 고주파 취급 */
+    cfg->sensor_bw_hz        = 260.0f; /* MPU-6050 DLPF=0 가속도 대역 */
 
     cfg->sigma_threshold     = 3.0f;
     cfg->anomaly_min_features= 1;

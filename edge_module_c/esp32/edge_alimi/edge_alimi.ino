@@ -60,8 +60,11 @@ static const char *API_KEY = "";
 
 /* ---- MPU-6050 최소 드라이버 (라이브러리 의존 제거) ---- */
 #define MPU_ADDR        0x68
+#define REG_SMPLRT_DIV  0x19         /* [v2] 출력율 분주: 8kHz/(1+div) */
 #define REG_PWR_MGMT_1  0x6B
 #define REG_CONFIG      0x1A
+#define REG_INT_ENABLE  0x38         /* [v2] DATA_RDY 인터럽트 활성 */
+#define REG_INT_STATUS  0x3A         /* [v2] bit0 = 새 샘플 준비됨 (읽으면 클리어) */
 #define REG_ACCEL_CFG   0x1C
 #define REG_ACCEL_XOUT  0x3B
 #define ACCEL_CLIP_RAW  32200        /* ±4g 풀스케일(32767) 근접 = 클리핑 */
@@ -82,9 +85,14 @@ static bool mpu_init()
     Wire.setClock(400000);           /* I2C fast mode — 1kHz 샘플링 전제 */
     Wire.setTimeOut(5);              /* 배선 불량 시 5ms 내 실패 처리 */
     bool ok = true;
-    ok &= mpu_write(REG_PWR_MGMT_1, 0x00); /* 슬립 해제 */
+    ok &= mpu_write(REG_PWR_MGMT_1, 0x01); /* 슬립 해제, 클럭=자이로 X PLL (안정) */
     delay(50);
     ok &= mpu_write(REG_CONFIG, 0x00);     /* DLPF 260Hz — 대역 최대 확보 */
+    /* [v2] 센서 동기 샘플링: DLPF=0 이면 내부 8kHz → 분주 7+1 = 1kHz 정확.
+     * ESP32 폴링 클럭이 아니라 센서 자신의 클럭이 샘플 시점을 정한다 →
+     * 같은 값 중복/건너뜀(비트 현상)과 지터가 구조적으로 사라짐 (gap ③④) */
+    ok &= mpu_write(REG_SMPLRT_DIV, 7);
+    ok &= mpu_write(REG_INT_ENABLE, 0x01); /* DATA_RDY → INT_STATUS bit0 세팅 */
     ok &= mpu_write(REG_ACCEL_CFG, 0x08);  /* ±4g */
     Wire.beginTransmission(MPU_ADDR);
     Wire.write(0x75);                /* WHO_AM_I */
@@ -339,22 +347,39 @@ void setup()
     server.begin();
 }
 
+/* [v2] 센서 data-ready 확인: INT_STATUS bit0 (읽으면 자동 클리어) */
+static bool mpu_data_ready(void)
+{
+    Wire.beginTransmission(MPU_ADDR);
+    Wire.write(REG_INT_STATUS);
+    if (Wire.endTransmission(false) != 0) return false;
+    if (Wire.requestFrom((uint8_t)MPU_ADDR, (uint8_t)1) != 1) return false;
+    return (Wire.read() & 0x01) != 0;
+}
+
 /*
- * 윈도 하나 수집 — micros() 페이싱으로 균일 샘플링.
+ * 윈도 하나 수집 — [v2] 센서 동기 샘플링.
+ * micros() 페이싱(ESP32 클럭) 대신 센서의 DATA_RDY 상태를 확인해
+ * "센서가 새 값을 만들었을 때만" 읽는다. 두 클럭의 비트(beat) 현상으로
+ * 생기던 중복/누락 샘플과 지터가 구조적으로 사라진다 (gap ③④).
+ * INT 핀 배선은 불필요 — 상태 레지스터 폴링(I2C read ≈ 60µs)으로 충분.
  * HTTP 는 수집 중 처리하지 않는다 (샘플 간격 지터 → 스펙트럼 왜곡 방지).
  * 반환: 실측 fs. bad_out: I2C 실패 샘플 수, clip_out: 클리핑 샘플 수.
  */
 static float acquire_window(int *bad_out, int *clip_out)
 {
-    const uint32_t period_us = (uint32_t)(1000000.0f / SAMPLE_RATE_HZ);
-    uint32_t next = micros();
-    uint32_t t_start = next;
+    const uint32_t timeout_us = 3000;   /* data-ready 3ms 무응답 = 샘플 실패 */
+    uint32_t t_start = micros();
     int bad = 0, clip = 0;
     float last_good = 0.0f;
     for (int i = 0; i < EM_FFT_SIZE; i++) {
-        while ((int32_t)(micros() - next) < 0) { }
+        uint32_t t0 = micros();
+        bool ready = false;
+        while ((uint32_t)(micros() - t0) < timeout_us) {
+            if (mpu_data_ready()) { ready = true; break; }
+        }
         float v; int16_t raw;
-        if (mpu_read_accel(&v, &raw)) {
+        if (ready && mpu_read_accel(&v, &raw)) {
             last_good = v;
             if (raw >= ACCEL_CLIP_RAW || raw <= -ACCEL_CLIP_RAW) clip++;
         } else {
@@ -363,7 +388,6 @@ static float acquire_window(int *bad_out, int *clip_out)
             v = last_good;   /* 단발 실패는 직전값 유지 (스파이크 방지) */
         }
         g_sig[i] = v;
-        next += period_us;
     }
     *bad_out = bad;
     *clip_out = clip;
